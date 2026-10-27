@@ -1309,7 +1309,8 @@ PAGES.ranks = async c => {
     <div class="sub">What you can hold for an hour &mdash; the number that moves every PR at once</div></div></div>
     <div class="card-b"><div class="prlist">${d.thresholds.map(thrRow).join('')}</div>
     ${d.thresholds.some(t => t.sport === 'Bike') ? `<div class="small muted" style="margin-top:10px">${I('info')}
-      Ride times aren't ranked on their own &mdash; course, wind and wheels decide them &mdash; so the bike rank comes from FTP.</div>` : ''}
+      Your bike rank is the better of FTP and your best 20, 40, 100 or 160 km ride or race. Course, wind and drafting
+      move those times, so a hilly or sheltered result is a guide, not a stopwatch.</div>` : ''}
     </div></div>` : ''}
 
   ${d.multi.length ? `<div class="card mt"><div class="card-h"><div><h3>Race ranks</h3>
@@ -1427,7 +1428,7 @@ function rankLadder() {
         standard <b>age-graded percentage</b>, so these are the classes it has always meant.</p>
       <ul class="small muted" style="margin:0;padding-left:18px;display:grid;gap:4px">
         <li><b>Run</b> &mdash; your time against the world record for the distance (track for the mile, 5K and 10K; road for the half and marathon).</li>
-        <li><b>Bike</b> &mdash; FTP in watts per kilo on the Coggan power profile, whose own categories (Cat 5 up to world class) line up with these tiers.</li>
+        <li><b>Bike</b> &mdash; the better of two: FTP in watts per kilo on the Coggan power profile (its categories, Cat 5 up to world class, line up with these tiers), or your best 20, 40, 100 or 160 km ride or race against hour-record pace for the distance. The second is for riders who are faster than their FTP says.</li>
         <li><b>Swim</b> &mdash; your time against the long-course freestyle world record, and CSS against world-record 1500 pace.</li>
         <li><b>Multisport</b> &mdash; your finish time against the world-best time for that distance. Courses vary far more than tracks do, so these are a guide.</li>
         <li><b>Off the bike</b> &mdash; a run split from a multisport race, against world-class triathlon run splits rather than track records.</li>
@@ -3243,7 +3244,7 @@ MPAGES.ranks = async c => {
   ${d.by_sport.length > 1 ? `<div class="mchips" id="mrkChips">${chips.map(s => `<button class="${s === MCR_SPORT ? 'on' : ''}" data-chip="${esc(s)}">${esc(s)}</button>`).join('')}</div>` : ''}
 
   ${d.thresholds.length && MCR_SPORT === 'All' ? `<div class="msec"><h3>Engine</h3><div class="mlist">${d.thresholds.map(mcrThr).join('')}</div>
-    <p class="small muted mcr-note">Ride times aren't ranked on their own &mdash; course, wind and wheels decide them &mdash; so the bike rank comes from FTP.</p></div>` : ''}
+    <p class="small muted mcr-note">Your bike rank is the better of FTP and your best 20, 40, 100 or 160 km ride or race. Hills and drafting move those times, so read them as a guide.</p></div>` : ''}
 
   ${d.multi.length && MCR_SPORT === 'All' ? `<div class="msec" id="mrk-race"><h3>Race ranks</h3><div class="mlist">${d.multi.map(mcrRow).join('')}</div>
     <p class="small muted mcr-note">Courses differ far more than a track does, so read these as a guide, not a stopwatch.</p></div>` : ''}

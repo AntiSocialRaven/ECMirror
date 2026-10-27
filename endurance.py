@@ -387,12 +387,20 @@ REF_TIMES = {
     ("Run", "half"): (3402.0, 3772.0), ("Run", "mar"): (7235.0, 7796.0),
     ("Swim", "100m"): (46.40, 51.71), ("Swim", "400m"): (220.0, 235.0), ("Swim", "1500m"): (871.0, 920.5),
     ("Row", "2k"): (335.8, 381.1),  # 2 km erg world records (Concept2), not on-water
+    # Bike: the UCI hour record (56.79 km men, 50.46 km women) carried to each distance with a fatigue decay -
+    # 59 / 56.8 / 51.5 / 49 km/h for 20 / 40 / 100 / 160 km, women at the hour-record ratio. Pure time-trial speeds.
+    # ponytail: a road race is drafted, hilly or both, so a good result there reads low (or high, in a peloton)
+    # against these; the page says so. Course-adjusting would need elevation and wind per ride.
+    ("Bike", "20k"): (1220.0, 1373.0), ("Bike", "40k"): (2535.0, 2854.0),
+    ("Bike", "100k"): (6990.0, 7868.0), ("Bike", "160k"): (11755.0, 13232.0),
 }
 RECORD_EVENTS = [  # sport, key, label, km - the distances a best effort is hunted for
     ("Run", "1mi", "1 mile", 1.609344), ("Run", "5k", "5K", 5.0), ("Run", "10k", "10K", 10.0),
     ("Run", "half", "Half marathon", 21.0975), ("Run", "mar", "Marathon", 42.195),
     ("Swim", "100m", "100 m", 0.1), ("Swim", "400m", "400 m", 0.4), ("Swim", "1500m", "1500 m", 1.5),
     ("Row", "2k", "2 km", 2.0),
+    ("Bike", "20k", "20 km ride", 20.0), ("Bike", "40k", "40 km ride", 40.0),
+    ("Bike", "100k", "100 km ride", 100.0), ("Bike", "160k", "160 km ride", 160.0),
 ]
 # Threshold references: world-class sustainable output. Run = the one-hour run records (21.33 km / 18.93 km) as
 # s/km; swim = world-record 1500 pace as s/100 m; bike = the top row of the Coggan power profile, W/kg at FTP.
@@ -517,7 +525,7 @@ def _best_window(splits, km):
     return best
 
 
-def event_window(km):
+def event_window(km, sport=None):
     """The range of logged distances that counts as a standard one, as (shortest, longest).
 
     A flat percentage gets this backwards. Three percent of a mile is 48 m, which no GPS watch holds - a mile
@@ -526,11 +534,13 @@ def event_window(km):
     scaled, and it is deliberately asymmetric: running a little long and scaling the time back is conservative,
     because a true mile would have been faster still, whereas scaling a short effort up flatters it.
     """
+    if sport == "Bike":  # courses are measured loosely: a "40 km" time trial is 38.9 to 41.6 on real roads
+        return km * 0.98, km * 1.08
     return km * 0.98, km + min(km * 0.10, 0.6)
 
 
-def counts_as(have_km, want_km):
-    lo, hi = event_window(want_km)
+def counts_as(have_km, want_km, sport=None):
+    lo, hi = event_window(want_km, sport)
     return lo <= have_km <= hi
 
 
@@ -548,7 +558,7 @@ def _efforts(rows, races, p):
     rk, rs = p.get("recent_race_km") or 0, p.get("recent_race_s") or 0
     for sport, key, label, km in RECORD_EVENTS:
         for w in rows:
-            if SPORT_FAMILY.get(w["sport"], w["sport"]) != sport or not w["dur_s"]:
+            if SPORT_FAMILY.get(w["sport"], w["sport"]) != sport or not w["dur_s"] or w["sport"] == "Brick":
                 continue
             d = w["dist_km"] or 0
             splits = json.loads(w["splits"]) if w["splits"] else None
@@ -556,7 +566,7 @@ def _efforts(rows, races, p):
                 t = _best_window(splits, km)
                 if t:
                     add((sport, key), t, w["date"], say("pr.source.block"))
-            if d and counts_as(d, km):  # logged as that distance: the clean case
+            if d and counts_as(d, km, sport):  # logged as that distance: the clean case
                 adj = _scale(w["dur_s"], d, km)
                 add((sport, key), adj, w["date"], say("pr.source.logged") if adj == w["dur_s"]
                     else say("pr.source.adjusted", logged=leg_label(sport, d)))
@@ -565,7 +575,7 @@ def _efforts(rows, races, p):
         for r in races:
             legs = r["legs"]
             if r["result_s"] and len(legs) == 1 and legs[0]["sport"] == sport \
-                    and counts_as(legs[0]["km"], km):
+                    and counts_as(legs[0]["km"], km, sport):
                 add((sport, key), _scale(r["result_s"], legs[0]["km"], km), r["date"], r["name"])
         # the profile's benchmark race is usually one of the sessions above under another name, so it only
         # fills a gap - it never adds a second entry for an event the log already covers
@@ -691,6 +701,8 @@ def _ranked(hits, ref, p, label, **extra):
                 next_time=hms(goal) if goal else "", **extra, **t)
 
 def event_pace(sport, secs, km):
+    if sport == "Bike":
+        return speed_ui(km / (secs / 3600))
     return fd("swim", secs / (km * 10)) if sport == "Swim" else \
         fd("swim", secs / (km * 5)).replace(unit("swim"), "/500m") if sport == "Row" else fd("pace", secs / km)
 
