@@ -2827,6 +2827,19 @@
         background: var(--c);
         transition: width 0.5s ease;
       }
+      .ladder-b {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        margin: 12px 0 -4px;
+      }
+      .ladder-b .todo {
+        opacity: 0.38;
+        filter: grayscale(0.6);
+      }
+      .ladder-b .here {
+        filter: drop-shadow(0 0 5px var(--c));
+      }
       .ladder-l {
         display: flex;
         justify-content: space-between;
@@ -5552,6 +5565,13 @@
       ) => `<div class="ladder"><i style="--c:${t.colour};width:${Math.max(2, t.pct)}%"></i></div>
   <div class="ladder-l"><span>${esc(t.tier)}${t.div ? " " + t.div : ""} · ${t.score}</span><span>${t.next ? `${extra || ""}${esc(t.next)} at ${t.next_at}` : "top of the ladder"}</span></div>`;
 
+      // the three divisions of the current tier along the bar, and the next tier's badge as the promotion at the far end
+      const DIVS = ["III", "II", "I"];
+      const ladderBadges = (t) =>
+        t.div && t.next
+          ? `<div class="ladder-b">${DIVS.map((d) => `<span class="${d === t.div ? "here" : DIVS.indexOf(d) < DIVS.indexOf(t.div) ? "done" : "todo"}" style="--c:${t.colour}">${tierBadge({ tier: t.tier, div: d, colour: t.colour }, 26)}</span>`).join("")}<span class="todo next" title="${esc(t.next)}">${tierBadge({ tier: t.next, div: "", colour: t.next_colour }, 30)}</span></div>`
+          : "";
+
       let RANKS = null;
       PAGES.ranks = async (c) => {
         const d = (RANKS = await call("records"));
@@ -5726,7 +5746,7 @@
     <div class="modal-b">
       <div class="rank-hero">${tierBadge(e, 64)}<div class="who">
         <div class="tier">${esc(e.time)}</div><div class="cls">${e.pace ? esc(e.pace) + " · " : ""}${esc(e.tier)}${e.div ? " " + e.div : ""} · ${esc(e.cls)}</div></div></div>
-      ${ladder(e, e.to_next ? `${e.to_next} to ` : "")}
+      ${ladderBadges(e)}${ladder(e, e.to_next ? `${e.to_next} to ` : "")}
       <div class="rank-facts">
         ${[
           ["Score", `${e.score} / 100`],
@@ -9001,7 +9021,7 @@
       st.on
         ? `<div class="row wrap"><div class="grow small muted">${st.last ? "Last import " + new Date(st.last).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "Not imported yet"}.
         Imports automatically when you open the app. Values you type yourself are never overwritten.</div>
-        <button type="button" class="btn primary" id="hSync">${I("refresh")}Import now</button><button type="button" class="btn" id="hOff">Turn off</button></div>`
+        <button type="button" class="btn primary" id="hSync">${I("refresh")}Import now</button><button type="button" class="btn" id="hScan" title="Look back 90 days; anything already logged is skipped">Re-scan 90 days</button><button type="button" class="btn" id="hOff">Turn off</button></div>`
         : `<p class="muted" style="margin:0 0 12px">You choose exactly what to share on the next screen. Duplicates of workouts you've already logged or imported are skipped.</p>
         <button type="button" class="btn primary" id="hOn">${I("heart")}Connect Apple Health</button>`
     }</div>`;
@@ -9013,6 +9033,11 @@
         };
         if ($("#hOn")) $("#hOn").onclick = () => run(true);
         if ($("#hSync")) $("#hSync").onclick = () => run(false);
+        if ($("#hScan"))
+          $("#hScan").onclick = async () => {
+            await call("health_rescan");
+            run(false);
+          };
         if ($("#hOff"))
           $("#hOff").onclick = async () => {
             await call("health_enable", false);

@@ -1561,6 +1561,7 @@ def tier_of(score):
                 pct=round(frac * 100),
                 next=nxt[0] if nxt else "",
                 next_at=nxt[1] if nxt else None,
+                next_colour=nxt[4] if nxt else "",
             )
 
 
@@ -1634,7 +1635,7 @@ def counts_as(have_km, want_km, sport=None):
 def _scale(secs, have_km, want_km):
     """A time adjusted to the standard distance - left alone when the two are the same race in practice, so a
     result typed in as 21.1 km comes back as the time the athlete actually ran rather than a second under it."""
-    return secs if abs(have_km - want_km) <= want_km * 0.005 else secs * want_km / have_km
+    return secs if abs(have_km - want_km) <= max(want_km * 0.005, 0.03) else secs * want_km / have_km
 
 
 def _efforts(rows, races, p):
@@ -3486,6 +3487,9 @@ def health_to_data(workouts, samples):
     for w in workouts:
         sport = HEALTH_SPORTS.get(w.get("workoutType"), "Other")
         if not sport or not w.get("duration"):
+            continue
+        # a few seconds with no distance is a stray start, not a run (a 100 m sprint is short but has distance)
+        if float(w["duration"]) < 30 and not w.get("totalDistance"):
             continue
         start = iso(w["startDate"])
         acts.append(
@@ -6113,6 +6117,13 @@ class Api:
     @_locked
     def health_state(self):
         return dict(on=P["health_on"], last=P["health_last"])
+
+    @_locked
+    def health_rescan(self):
+        """Forget when Health was last read, so the next import looks back the full 90 days. Duplicates are skipped."""
+        P["health_last"] = ""
+        save_profile(self._db, touch=False)
+        return dict(ok=True)
 
     @_locked
     def health_enable(self, on):
