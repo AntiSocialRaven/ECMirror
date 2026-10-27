@@ -534,8 +534,8 @@ def event_window(km, sport=None):
     scaled, and it is deliberately asymmetric: running a little long and scaling the time back is conservative,
     because a true mile would have been faster still, whereas scaling a short effort up flatters it.
     """
-    if sport == "Bike":  # courses are measured loosely: a "40 km" time trial is 38.9 to 41.6 on real roads
-        return km * 0.98, km * 1.08
+    if sport == "Bike":  # courses are measured loosely: a "40 km" time trial is 38 to 43 on real roads
+        return km * 0.95, km * 1.08
     return km * 0.98, km + min(km * 0.10, 0.6)
 
 
