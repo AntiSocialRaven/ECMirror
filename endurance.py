@@ -695,7 +695,17 @@ def _ranked(hits, ref, p, label, **extra):
     af = age_factor(p.get("age", 30))
     t = tier_of(ref / max(1.0, secs * af) * 100)
     goal = ref / (t["next_at"] / 100) / af if t["next_at"] else None
-    return dict(label=label, have=True, secs=secs, time=hms(secs), date=date, source=src, count=len(hits),
+    km = extra.get("km")
+    steps = []  # every division's entry time, best first; Iron has no floor worth quoting
+    for name, lo, hi, _, colour in reversed(TIERS):
+        if lo <= 0:
+            continue
+        for div, k in ([("", 0)] if hi is None else [("I", 2), ("II", 1), ("III", 0)]):
+            at = lo if hi is None else lo + (hi - lo) * k / 3
+            need = ref / (at / 100) / af
+            steps.append(dict(tier=name, div=div, colour=colour, at=round(at, 1), time=hms(need),
+                              pace=event_pace(extra["sport"], need, km) if km else ""))
+    return dict(label=label, have=True, steps=steps, secs=secs, time=hms(secs), date=date, source=src, count=len(hits),
                 prev=hms(prev) if prev else "", gain=hms(prev - secs) if prev and prev > secs else "",
                 to_next=hms(secs - goal) if goal and goal < secs else "",
                 next_time=hms(goal) if goal else "", **extra, **t)
