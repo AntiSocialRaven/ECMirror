@@ -2473,7 +2473,7 @@ def build_plan(p, races, today=None, ctl=50, issues=None, scheduled=None):
                 sessions.append(
                     [d, p.get("team_sport") or "Run", mins * 60, mins / 60 * 0.75**2 * 100, team_desc(p), None]
                 )
-        weeks.append(dict(start=ws, phase=phase, sessions=sessions))
+        weeks.append(dict(start=ws, phase=phase, sessions=sessions, target_s=hrs * 3600))
 
     def on(d):
         return [s for w in weeks for s in w["sessions"] if s[0] == d]
@@ -2550,6 +2550,7 @@ def build_plan(p, races, today=None, ctl=50, issues=None, scheduled=None):
             f"{r['name']} ({r['priority']} race). See Races for pacing and fueling.",
             r["id"],
         )
+    touched = set()
     for sc in sorted(scheduled or [], key=lambda x: x["date"]):  # the athlete's own sessions win over the plan's
         d = dt.date.fromisoformat(sc["date"])
         if not first_day <= d <= last_day:
@@ -2574,6 +2575,21 @@ def build_plan(p, races, today=None, ctl=50, issues=None, scheduled=None):
                     x[4] = (
                         f"Easy {x[1].lower()} Z2, conversational: yesterday was your {sc['kind'].lower()} {sc['sport'].lower()}."
                     )
+        touched.add(wk["start"])
+    for wk in weeks:  # the week keeps its planned hours: what the athlete added is paid for by trimming the plan's own
+        if wk["start"] not in touched:
+            continue
+        theirs = lambda x: isinstance(x[5], str) or x[1] == "Race" or is_team(x)
+        mine_s = sum(x[2] for x in wk["sessions"] if theirs(x) and x[1] != "Race")
+        ours = [x for x in wk["sessions"] if not theirs(x)]
+        own_s = sum(x[2] for x in ours)
+        if own_s and mine_s + own_s > wk["target_s"]:
+            f = max(0.5, max(0.0, wk["target_s"] - mine_s) / own_s)
+            if f < 0.97:
+                for x in ours:
+                    x[2], x[3] = x[2] * f, x[3] * f
+                    if x[1] not in ("Rest", "Mobility", "Strength"):
+                        x[4] += " Trimmed to fit the session you added."
     adapt_plan(p, weeks, issues or [])
     for w in weeks:
         w["sessions"] = sorted(
@@ -5719,6 +5735,18 @@ class Api:
             place=P["home_place"],
         )
 
+    def _usual_duration(self, sport, kind, day):
+        """How long the plan would have had you do `sport` that week: that day's session, else the week's typical one."""
+        _, weeks = self._plan()
+        d = dt.date.fromisoformat(day)
+        wk = next((w for w in weeks if w["start"] <= d < w["start"] + 7 * ONE), None)
+        same = [x for x in (wk["sessions"] if wk else []) if x[1] == sport and not isinstance(x[5], str) and x[2]]
+        if not same:
+            return 2700.0
+        on_day = [x[2] for x in same if x[0] == d]
+        secs = on_day[0] if on_day else max(x[2] for x in same) if kind == "Long" else sum(x[2] for x in same) / len(same)
+        return float(round(secs / 300) * 300) or 2700.0
+
     @_locked
     def save_scheduled(self, f):
         try:
@@ -5743,6 +5771,8 @@ class Api:
             dist_km=dist,
             notes=(f.get("notes") or "").strip(),
         )
+        if not sched_duration(P, sc) and f.get("auto"):
+            sc["dur_s"] = dur = self._usual_duration(sport, kind, day)
         if not sched_duration(P, sc):
             return dict(
                 ok=False,

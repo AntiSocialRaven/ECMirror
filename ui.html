@@ -6587,17 +6587,17 @@
         };
         setTimeout(() => $("#locF").q.focus(), 30);
       }
-      async function editScheduled(uid) {
-        const f0 = await call("schedule_form", uid || null);
+      async function editScheduled(uid, pre) {
+        const f0 = { ...(await call("schedule_form", uid || null)), ...(pre || {}) };
         modal(
-          `<div class="modal-h"><div><h3>${uid ? "Edit session" : "Schedule a session"}</h3><div class="sub">The plan works around it, and you get a briefing with the weather and what to wear.</div></div><button class="icon-btn" data-close>${I("x")}</button></div>
+          `<div class="modal-h"><div><h3>${pre ? "Remake this week" : uid ? "Edit session" : "Schedule a session"}</h3><div class="sub">${pre ? "Say what you want to do and when. The rest of the week is rebuilt around it, keeping the same hours." : "The plan works around it, and you get a briefing with the weather and what to wear."}</div></div><button class="icon-btn" data-close>${I("x")}</button></div>
     <form class="modal-b form-grid" id="scF">
-      <label class="field"><span>Day</span><input type="date" name="date" value="${f0.date}"></label>
+      <label class="field"><span>Day</span><input type="date" name="date" value="${f0.date}" ${pre ? `min="${pre.min}" max="${pre.max}"` : ""}></label>
       <label class="field"><span>Start time</span><input type="time" name="time" value="${f0.time}"></label>
       <div class="field full"><span>Type</span><div class="seg">${f0.kinds.map((k) => `<label><input type="radio" name="kind" value="${k}" ${k === f0.kind ? "checked" : ""}><span>${k}</span></label>`).join("")}</div></div>
       <label class="field"><span>Sport</span><select name="sport">${f0.sports.map((x) => `<option ${x === f0.sport ? "selected" : ""}>${x}</option>`).join("")}</select></label>
       <label class="field"><span>Distance <span class="faint" style="font-weight:400">or a duration</span></span><div class="adorn"><input name="dist" type="number" step="any" min="0" value="${f0.dist}"><em id="scU">${f0.sport === "Swim" ? f0.swim_unit : f0.dist_unit}</em></div></label>
-      <div class="field"><span>Duration <span class="faint" style="font-weight:400">optional</span></span><div class="row" style="gap:6px"><div class="adorn grow"><input name="h" type="number" min="0" value="${f0.h}"><em>h</em></div><div class="adorn grow"><input name="m" type="number" min="0" max="59" value="${f0.m}"><em>min</em></div></div></div>
+      <div class="field"><span>Duration <span class="faint" style="font-weight:400">${pre ? "blank = the plan's usual length" : "optional"}</span></span><div class="row" style="gap:6px"><div class="adorn grow"><input name="h" type="number" min="0" value="${f0.h}"><em>h</em></div><div class="adorn grow"><input name="m" type="number" min="0" max="59" value="${f0.m}"><em>min</em></div></div></div>
       <label class="field"><span>Notes</span><input name="notes" value="${esc(f0.notes)}" placeholder="Route, who with…"></label>
     </form>
     <div class="modal-f">${uid ? `<button class="btn danger" id="scDel">${I("trash")}Delete</button>` : ""}<span class="grow"></span><button class="btn" data-close>Cancel</button><button class="btn primary" id="scSave">${I("check")}${uid ? "Save" : "Schedule"}</button></div>`,
@@ -6608,6 +6608,7 @@
         $("#scSave").onclick = async () => {
           const o = formValues(f);
           o.uid = uid;
+          if (pre) o.auto = 1;
           const r = await call("save_scheduled", o);
           if (!r.ok) return toast("Could not save", r.error, "bad");
           closeModal();
@@ -6907,6 +6908,410 @@
         setTimeout(() => (e.h || e.m ? f.dist : f.m).focus(), 30);
       }
 
+      // ------------------------------------------------------------------ interval timer
+      // A structured session (warm-up, N reps, rests, cool-down) run off the clock. No GPS and nothing to carry:
+      // timed reps and rests end themselves with a beep, and a distance rep ends with one tap (or the space bar) as
+      // you cross the line. The phone can sit on the infield; it keeps time on its own clock, not on movement.
+      const IV_SPORTS = ["Run", "Bike", "Swim", "Row"],
+        IV_UNITS = { m: 1, yd: 0.9144, km: 1000, mi: 1609.344 },
+        IV_PRESETS = [
+          ["8 × 400 m", { by: "dist", reps: 8, dist: 400, unit: "m", rest: "1:30" }],
+          ["6 × 800 m", { by: "dist", reps: 6, dist: 800, unit: "m", rest: "2:00" }],
+          ["5 × 1 km", { by: "dist", reps: 5, dist: 1, unit: "km", rest: "2:00" }],
+          ["4 × 1 mi", { by: "dist", reps: 4, dist: 1, unit: "mi", rest: "3:00" }],
+          ["10 × 1 min", { by: "time", reps: 10, work: "1:00", rest: "1:00" }],
+          ["6 × 3 min", { by: "time", reps: 6, work: "3:00", rest: "2:00" }],
+          ["12 × 30/30", { by: "time", reps: 12, work: "0:30", rest: "0:30" }],
+        ],
+        IV_DEFAULT = {
+          sport: "Run",
+          reps: 8,
+          by: "dist",
+          dist: 400,
+          unit: "m",
+          work: "1:00",
+          rest: 90,
+          warm: 10,
+          cool: 10,
+          target: "",
+          voice: true,
+          gps: true,
+        };
+      const IV = {
+        state: "setup",
+        cfg: { ...IV_DEFAULT, ...store.get("ivCfg", {}) },
+        run: null,
+        timer: null,
+        wl: null,
+        ctx: null,
+      };
+      const parseSecs = (s) => {
+        const t = String(s ?? "").trim();
+        if (!t) return 0;
+        const p = t.split(":").map(Number);
+        return p.length > 3 || p.some((v) => isNaN(v) || v < 0) ? NaN : p.reduce((a, v) => a * 60 + v, 0);
+      };
+      const fmtT = (s) => {
+        const t = Math.round(s * 10) / 10,
+          m = Math.floor(t / 60);
+        return `${m}:${(t - m * 60).toFixed(1).padStart(4, "0")}`;
+      };
+      const ivLabel = (c) => `${c.dist} ${c.unit}`;
+      function ivSteps(c) {
+        const out = [];
+        if (c.warm > 0) out.push({ k: "warm", name: "Warm-up", secs: c.warm * 60 });
+        for (let i = 1; i <= c.reps; i++) {
+          out.push(
+            c.by === "dist"
+              ? {
+                  k: "work",
+                  rep: i,
+                  of: c.reps,
+                  dist_m: c.dist * IV_UNITS[c.unit],
+                  label: ivLabel(c),
+                  target: parseSecs(c.target),
+                }
+              : { k: "work", rep: i, of: c.reps, secs: parseSecs(c.work), label: c.work },
+          );
+          if (c.rest > 0 && i < c.reps) out.push({ k: "rest", name: "Rest", secs: c.rest });
+        }
+        if (c.cool > 0) out.push({ k: "cool", name: "Cool-down", secs: c.cool * 60 });
+        return out;
+      }
+      function ivBeep(freq, len = 0.12) {
+        try {
+          const x = IV.ctx;
+          if (!x) return;
+          if (x.state === "suspended") x.resume();
+          const o = x.createOscillator(),
+            g = x.createGain();
+          o.frequency.value = freq;
+          g.gain.setValueAtTime(0.25, x.currentTime);
+          g.gain.exponentialRampToValueAtTime(0.001, x.currentTime + len);
+          o.connect(g).connect(x.destination);
+          o.start();
+          o.stop(x.currentTime + len);
+          if (navigator.vibrate) navigator.vibrate(len * 1000);
+        } catch {}
+      }
+      function ivSay(text) {
+        try {
+          if (IV.cfg.voice && window.speechSynthesis) speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+        } catch {}
+      }
+      function ivCue(s) {
+        if (!s) {
+          ivBeep(660, 0.2);
+          setTimeout(() => ivBeep(880, 0.3), 260);
+          return ivSay("Workout complete");
+        }
+        ivBeep(s.k === "work" ? 880 : 520, 0.3);
+        if (s.k === "work") ivSay(`Rep ${s.rep} of ${s.of}, ${s.label}${s.dist_m ? "" : " hard"}`);
+        else ivSay(s.name);
+      }
+      function ivTick() {
+        const r = IV.run;
+        if (!r || IV.state !== "run") return;
+        const now = performance.now(),
+          dt = now - r.last;
+        r.last = now;
+        if (!r.paused) {
+          r.stepMs += dt;
+          r.totalMs += dt;
+        }
+        const s = r.steps[r.idx];
+        if (!r.paused && s.secs) {
+          const left = s.secs - r.stepMs / 1000;
+          if (left <= 0) return ivNext();
+          const whole = Math.ceil(left),
+            tag = r.idx + ":" + whole;
+          if (whole <= 3 && r.beeped !== tag) {
+            r.beeped = tag;
+            ivBeep(660, 0.08);
+          }
+        }
+        ivPaint();
+      }
+      function ivPaint() {
+        const r = IV.run;
+        if (!r || !$("#ivClock")) return;
+        const s = r.steps[r.idx],
+          sec = r.stepMs / 1000;
+        $("#ivClock").textContent = s.secs ? fmtClock(Math.max(0, Math.ceil(s.secs - sec))) : fmtT(sec);
+        $("#ivTotal").textContent = fmtClock(r.totalMs / 1000);
+        if (s.target) $("#ivClock").style.color = sec > s.target ? "var(--warn, #d9a521)" : "";
+      }
+      function ivNext() {
+        const r = IV.run,
+          s = r.steps[r.idx];
+        if (s.k === "work")
+          r.reps.push({
+            rep: s.rep,
+            dist_m: s.dist_m || 0,
+            secs: s.secs ? Math.min(r.stepMs / 1000, s.secs) : r.stepMs / 1000,
+            target: s.target || 0,
+          });
+        r.idx++;
+        r.stepMs = 0;
+        r.beeped = null;
+        if (r.idx >= r.steps.length) return ivFinish();
+        ivCue(r.steps[r.idx]);
+        render(true);
+      }
+      async function ivWake() {
+        try {
+          IV.wl = (await navigator.wakeLock?.request("screen")) || null;
+        } catch {}
+      }
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden && IV.state === "run") ivWake();
+      });
+      function ivStop() {
+        clearInterval(IV.timer);
+        IV.timer = null;
+        try {
+          if (IV.wl) IV.wl.release();
+        } catch {}
+        IV.wl = null;
+      }
+      async function ivFinish() {
+        ivStop();
+        IV.state = "done";
+        ivCue(null);
+        const r = IV.run;
+        if (r.gps) {
+          try {
+            r.gpsRes = await LiveWorkout.stop();
+          } catch {}
+        }
+        render();
+      }
+      document.addEventListener("keydown", (e) => {
+        if (
+          PAGE === "live" &&
+          IV.state === "run" &&
+          e.code === "Space" &&
+          !/INPUT|TEXTAREA|SELECT|BUTTON/.test(e.target.tagName)
+        ) {
+          e.preventDefault();
+          ivNext();
+        }
+      });
+      function ivRepRows(reps) {
+        const best = Math.min(...reps.map((x) => x.secs));
+        return reps
+          .map((x) => {
+            const d = x.target ? x.secs - x.target : null;
+            return `<div class="row small" style="justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)">
+      <span class="muted">Rep ${x.rep}</span><span style="${x.secs === best ? "font-weight:700" : ""}">${fmtT(x.secs)}${d == null ? "" : ` <span class="muted">(${d <= 0 ? "" : "+"}${d.toFixed(1)}s)</span>`}</span></div>`;
+          })
+          .join("");
+      }
+      function ivReadForm(f) {
+        const o = Object.fromEntries(new FormData(f)),
+          c = { ...IV.cfg };
+        c.sport = o.sport || c.sport;
+        c.by = o.by || c.by;
+        c.reps = Math.round(+o.reps);
+        if (o.dist !== undefined) c.dist = +o.dist;
+        c.unit = o.unit || c.unit;
+        if (o.work !== undefined) c.work = o.work;
+        c.rest = parseSecs(o.rest);
+        c.target = o.target ?? c.target;
+        c.warm = +o.warm || 0;
+        c.cool = +o.cool || 0;
+        c.voice = !!o.voice;
+        c.gps = !!o.gps;
+        return c;
+      }
+      async function ivView(c) {
+        const cfg = IV.cfg,
+          r = IV.run;
+        if (IV.state === "run") {
+          const s = r.steps[r.idx],
+            nx = r.steps[r.idx + 1],
+            dist = s.k === "work" && s.dist_m,
+            col2 = s.k === "work" ? col(cfg.sport) : "var(--muted)",
+            nextTxt = nx
+              ? nx.k === "work"
+                ? `Rep ${nx.rep} · ${nx.label}`
+                : nx.name + (nx.secs ? ` · ${fmtClock(nx.secs)}` : "")
+              : "Finish";
+          c.innerHTML = `<div class="page"><div class="card" style="text-align:center;max-width:520px;margin:0 auto;--c:${col2}">
+    <div class="row" style="justify-content:center;gap:10px"><span class="dot" style="--c:${col2}"></span><b style="font-size:20px">${s.k === "work" ? `Rep ${s.rep} of ${s.of} · ${esc(s.label)}` : esc(s.name)}</b></div>
+    <div id="ivClock" style="font-size:84px;font-weight:700;letter-spacing:-2px;margin:10px 0 2px;font-variant-numeric:tabular-nums">0:00</div>
+    <div class="small muted">${s.target ? `Target ${fmtClock(s.target)} · ` : ""}Next: ${esc(nextTxt)} · total <span id="ivTotal">0:00</span> · step ${r.idx + 1}/${r.steps.length}</div>
+    <div class="row live-btns" style="justify-content:center;gap:10px;margin-top:22px">
+      <button class="btn primary" id="ivLap" style="min-width:60%;height:64px;font-size:18px">${I("check")}${dist ? "Lap: finished the rep" : "Skip"}</button>
+      <button class="btn" id="ivPause" style="height:64px">${I(r.paused ? "play" : "pause")}${r.paused ? "Resume" : "Pause"}</button></div>
+    <div class="row" style="justify-content:center;gap:10px;margin-top:12px">
+      <button class="btn" id="ivEnd">${I("check")}End &amp; save</button><button class="btn danger" id="ivDiscard">${I("trash")}Discard</button></div>
+    </div>
+    ${
+      r.reps.length
+        ? `<div class="card mt" style="max-width:520px;margin:12px auto 0"><div class="card-h"><h3>Reps</h3></div><div class="card-b">${ivRepRows(r.reps)}</div></div>`
+        : ""
+    }</div>`;
+          ivPaint();
+          $("#ivLap").onclick = ivNext;
+          $("#ivPause").onclick = () => {
+            r.paused = !r.paused;
+            r.last = performance.now();
+            render(true);
+          };
+          $("#ivEnd").onclick = ivFinish;
+          $("#ivDiscard").onclick = async () => {
+            if (!(await confirmBox("Discard this workout?", "The reps timed so far will be lost.", "Discard"))) return;
+            ivStop();
+            if (r.gps)
+              try {
+                await LiveWorkout.discard();
+              } catch {}
+            IV.state = "setup";
+            render();
+          };
+          return;
+        }
+        if (IV.state === "done") {
+          const reps = r.reps,
+            gpsKm = r.gpsRes && r.gpsRes.dist_km > 0 ? r.gpsRes.dist_km : 0,
+            sumM = gpsKm ? gpsKm * 1000 : reps.reduce((a, x) => a + x.dist_m, 0),
+            swim = cfg.sport === "Swim",
+            unit = swim ? BOOT.swim_unit : BOOT.dist_unit,
+            div = swim ? (unit === "yd" ? 0.9144 : 1) : unit === "mi" ? 1609.344 : 1000,
+            avg = reps.length ? reps.reduce((a, x) => a + x.secs, 0) / reps.length : 0,
+            best = reps.length ? Math.min(...reps.map((x) => x.secs)) : 0,
+            worst = reps.length ? Math.max(...reps.map((x) => x.secs)) : 0,
+            stat = (l, v) =>
+              `<div><div class="small muted">${l}</div><b style="font-size:22px">${v}</b></div>`;
+          c.innerHTML = `<div class="page"><div class="card" style="max-width:520px;margin:0 auto">
+    <div class="card-h"><div><h3>Workout done</h3><div class="sub">${fmtClock(r.totalMs / 1000)} · ${reps.length} rep${reps.length === 1 ? "" : "s"} timed</div></div></div>
+    <div class="card-b">
+      ${
+        reps.length
+          ? `<div style="display:grid;grid-template-columns:repeat(3,1fr);text-align:center;margin-bottom:12px">${stat("Average", fmtT(avg))}${stat("Fastest", fmtT(best))}${stat("Spread", (worst - best).toFixed(1) + "s")}</div>${ivRepRows(reps)}`
+          : `<div class="small muted">No reps were timed.</div>`
+      }
+      <label class="field" style="margin-top:14px"><span>Total distance <span class="faint" style="font-weight:400">${unit}${gpsKm ? ", from GPS" : "; add your warm-up and cool-down if you want them counted"}</span></span>
+        <input id="ivDist" type="number" step="any" min="0" value="${sumM ? (sumM / div).toFixed(2) : ""}"></label>
+    </div>
+    <div class="modal-f"><button class="btn danger" id="ivDrop">${I("trash")}Discard</button><span class="grow"></span><button class="btn primary" id="ivSave">${I("check")}Save workout</button></div></div></div>`;
+          $("#ivDrop").onclick = () => {
+            IV.state = "setup";
+            render();
+          };
+          $("#ivSave").onclick = async () => {
+            const v = +$("#ivDist").value || 0,
+              km = swim ? v * (unit === "yd" ? 0.0009144 : 0.001) : v * (unit === "mi" ? 1.609344 : 1),
+              what = cfg.by === "dist" ? `${cfg.reps} × ${ivLabel(cfg)}` : `${cfg.reps} × ${cfg.work}`,
+              res = await call("save_live_workout", {
+                sport: cfg.sport,
+                date: BOOT.today,
+                start: localIso(r.startedAt),
+                dur_s: Math.round(r.totalMs / 1000),
+                dist_km: km,
+                notes: `Intervals, ${what}: ${reps.map((x) => fmtT(x.secs)).join(", ")}`,
+              });
+            if (!res.ok) return toast("Could not save", res.error, "bad");
+            IV.state = "setup";
+            toast("Workout saved", `${cfg.sport} · ${what}`);
+            refreshAll();
+            go("log");
+          };
+          return;
+        }
+        const sports = IV_SPORTS.filter((s) => BOOT.sports.includes(s)),
+          opts = sports.length ? sports : IV_SPORTS;
+        if (!opts.includes(cfg.sport)) cfg.sport = opts[0];
+        c.innerHTML = `<div class="page"><div class="card" style="max-width:560px;margin:0 auto">
+    <div class="card-h"><div><h3>Interval workout</h3><div class="sub">Set the session up once. It times every rep and rest and beeps you through it, with or without GPS.</div></div></div>
+    <form class="card-b" id="ivF">
+      <div class="seg" style="margin-bottom:12px">${opts.map((s) => `<label><input type="radio" name="sport" value="${s}" ${s === cfg.sport ? "checked" : ""}><span><i class="dot" style="--c:${col(s)}"></i>${s}</span></label>`).join("")}</div>
+      <div class="row wrap" style="gap:6px;margin-bottom:14px">${IV_PRESETS.map(([n], i) => `<button type="button" class="btn sm" data-pre="${i}">${n}</button>`).join("")}</div>
+      <div class="form-grid">
+        <label class="field"><span>Reps</span><input name="reps" type="number" min="1" max="99" value="${cfg.reps}"></label>
+        <div class="field"><span>Each rep is</span><div class="seg"><label><input type="radio" name="by" value="dist" ${cfg.by === "dist" ? "checked" : ""}><span>A distance</span></label><label><input type="radio" name="by" value="time" ${cfg.by === "time" ? "checked" : ""}><span>A time</span></label></div></div>
+        ${
+          cfg.by === "dist"
+            ? `<div class="field"><span>Distance</span><div class="row" style="gap:6px"><input name="dist" type="number" step="any" min="0" value="${cfg.dist}" style="flex:1"><select name="unit">${Object.keys(IV_UNITS)
+                .map((u) => `<option ${u === cfg.unit ? "selected" : ""}>${u}</option>`)
+                .join("")}</select></div></div>
+        <label class="field"><span>Target per rep <span class="faint" style="font-weight:400">optional · m:ss</span></span><input name="target" placeholder="1:32" value="${esc(cfg.target)}"></label>`
+            : `<label class="field"><span>Hard for <span class="faint" style="font-weight:400">m:ss</span></span><input name="work" value="${esc(cfg.work)}"></label>`
+        }
+        <label class="field"><span>Rest between <span class="faint" style="font-weight:400">m:ss</span></span><input name="rest" value="${fmtClock(cfg.rest || 0)}"></label>
+        <label class="field"><span>Warm-up <span class="faint" style="font-weight:400">min, 0 to skip</span></span><input name="warm" type="number" min="0" value="${cfg.warm}"></label>
+        <label class="field"><span>Cool-down <span class="faint" style="font-weight:400">min, 0 to skip</span></span><input name="cool" type="number" min="0" value="${cfg.cool}"></label>
+        <label class="field"><span>Spoken cues</span><span class="row" style="gap:8px"><input type="checkbox" name="voice" ${cfg.voice ? "checked" : ""}> Announce each rep</span></label>
+        ${window.LiveWorkout && GPS_SPORTS.includes(cfg.sport) ? `<label class="field"><span>GPS</span><span class="row" style="gap:8px"><input type="checkbox" name="gps" ${cfg.gps ? "checked" : ""}> Also track distance</span></label>` : ""}
+      </div>
+      <div class="small muted" style="margin:12px 0">${cfg.by === "dist" ? "Tap Lap (or press space) as you cross the line to end each rep. Rests and the warm-up run themselves." : "Reps and rests run themselves; just follow the beeps."} The last 3 seconds of each step are beeped in.</div>
+      <button type="submit" class="btn primary" style="width:100%;height:52px;font-size:16px">${I("play")}Start</button>
+    </form></div></div>`;
+        const f = $("#ivF");
+        $$("#ivF [data-pre]").forEach(
+          (b) =>
+            (b.onclick = () => {
+              const p = IV_PRESETS[+b.dataset.pre][1];
+              IV.cfg = { ...ivReadForm(f), ...p, rest: parseSecs(p.rest) };
+              render(true);
+            }),
+        );
+        $$("#ivF input[name=sport], #ivF input[name=by]").forEach(
+          (x) =>
+            (x.onchange = () => {
+              IV.cfg = ivReadForm(f);
+              render(true);
+            }),
+        );
+        f.onsubmit = async (e) => {
+          e.preventDefault();
+          const c2 = ivReadForm(f);
+          const bad = !(c2.reps >= 1)
+            ? "Enter how many reps"
+            : c2.by === "dist" && !(c2.dist > 0)
+              ? "Enter a rep distance"
+              : c2.by === "time" && !(parseSecs(c2.work) > 0)
+                ? "Enter how long each rep is, like 1:00"
+                : isNaN(c2.rest) || isNaN(parseSecs(c2.target))
+                  ? "Times look like 1:30"
+                  : "";
+          if (bad) return toast("Check the setup", bad, "bad");
+          IV.cfg = c2;
+          store.set("ivCfg", c2);
+          try {
+            IV.ctx = IV.ctx || new (window.AudioContext || window.webkitAudioContext)();
+            IV.ctx.resume();
+          } catch {}
+          const steps = ivSteps(c2);
+          IV.run = {
+            steps,
+            idx: 0,
+            stepMs: 0,
+            totalMs: 0,
+            last: performance.now(),
+            paused: false,
+            reps: [],
+            startedAt: new Date(),
+            beeped: null,
+          };
+          IV.state = "run";
+          ivStop();
+          IV.timer = setInterval(ivTick, 100);
+          ivWake();
+          if (c2.gps && window.LiveWorkout && GPS_SPORTS.includes(c2.sport)) {
+            wireLiveOnce();
+            LIVE.unit = BOOT.dist_unit;
+            try {
+              await LiveWorkout.start(c2.sport, LIVE.unit, null);
+              IV.run.gps = true;
+            } catch {}
+          }
+          ivCue(steps[0]);
+          render();
+        };
+      }
+
       // ------------------------------------------------------------------ live workout tracking
       // GPS splits + pace alerts, via LiveWorkout (native plugin, see LiveWorkoutPlugin.swift); the watch is the
       // real recorder for races, this phone screen is the fallback when you're carrying your phone instead.
@@ -7114,6 +7519,7 @@
   <div class="card mt"><div class="card-h wrap"><div class="row"><button class="icon-btn" id="prevW" ${WEEK ? "" : "disabled"}>${I("left")}</button>
       <div><h3>Week ${WEEK + 1} of ${d.weeks.length} · ${esc(w.range)}</h3><div class="sub">${esc(w.focus)}</div></div><button class="icon-btn" id="nextW" ${WEEK < d.weeks.length - 1 ? "" : "disabled"}>${I("right")}</button></div>
     <div class="row wrap"><span class="badge" style="--c:${PHASE[w.phase]}"><i></i>${w.phase}</span><span class="pill">${w.hours} h planned</span><span class="pill ${w.done >= w.hours * 0.9 ? "ok" : ""}">${w.done} h done</span><span class="pill">${w.tss} TSS</span><span class="pill">${doneN}/${allS.length} sessions</span>
+      <button class="btn sm" id="remakeW">${I("refresh")}Remake this week</button>
       ${!w.current && cur ? `<button class="btn sm" id="toNow">This week</button>` : ""}</div></div>
     <div class="card-b"><div class="cal">${w.days
       .map(
@@ -7176,6 +7582,17 @@
             toast("Plan rebuilt from this week");
             refreshAll();
           }
+        };
+        $("#remakeW").onclick = () => {
+          const today = new Date().toLocaleDateString("en-CA"),
+            open = w.days.filter((x) => x.date >= today);
+          if (!open.length) return toast("That week is over", "Pick a current or upcoming week.", "bad");
+          editScheduled(null, {
+            date: (open.find((x) => x.today) || open[0]).date,
+            min: open[0].date,
+            max: w.days[6].date,
+            kind: "Easy",
+          });
         };
         $$(".sess").forEach((el) => (el.onclick = () => sessionSheet(w, el.dataset.d, +el.dataset.k)));
       };
@@ -9999,6 +10416,41 @@
           render();
         };
       };
+
+      // ---- Start workout: one page for both ways to train. Free is the GPS screen above; Intervals lays a structure
+      // (reps, rests, warm-up, cool-down) over the clock, with GPS distance on top when this device has it.
+      const liveMode = () => store.get("liveMode", window.LiveWorkout ? "free" : "intervals");
+      function wrapLive(gps) {
+        return async (c) => {
+          if (IV.state !== "setup") return ivView(c);
+          if (LIVE.state === "active") return gps(c);
+          const mode = liveMode();
+          await (mode === "intervals" ? ivView(c) : gps(c));
+          const pg = c.querySelector(".page");
+          if (!pg) return;
+          pg.insertAdjacentHTML(
+            "afterbegin",
+            `<div class="seg" id="liveMode" style="max-width:420px;margin:0 auto 12px">${[
+              ["free", "bolt", "Free workout"],
+              ["intervals", "clock", "Intervals"],
+            ]
+              .map(
+                ([v, ic, n]) =>
+                  `<label><input type="radio" name="liveMode" value="${v}" ${v === mode ? "checked" : ""}><span>${I(ic)}${n}</span></label>`,
+              )
+              .join("")}</div>`,
+          );
+          $$("#liveMode input").forEach(
+            (r) =>
+              (r.onchange = () => {
+                store.set("liveMode", r.value);
+                render(true);
+              }),
+          );
+        };
+      }
+      PAGES.live = wrapLive(PAGES.live);
+      MPAGES.live = wrapLive(MPAGES.live);
 
       // ---- phone: profile & settings. Each settings group is a fold (first one open) so the page opens as a short
       // list of headings, not 40 fields; the save bar, dirty tracking and sync/data cards behave as on desktop.
