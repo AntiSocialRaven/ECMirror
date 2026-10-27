@@ -491,14 +491,15 @@ AGE_CURVE = [
 # record-holder. A locally competitive runner, clearly ahead of most of a real field, read as barely above
 # Iron. These bands are re-spaced so a strong-but-human performance lands where it reads as strong.
 TIERS = [
-    ("Iron", 0, 35, "Building", "#8a919c"),
-    ("Bronze", 35, 47, "Club level", "#b5783c"),
-    ("Silver", 47, 56, "Local class", "#9aa5b1"),
-    ("Gold", 56, 65, "Regional class", "#d9a521"),
-    ("Platinum", 65, 74, "National class", "#2fb8bf"),
-    ("Emerald", 74, 82, "National podium", "#17b26a"),
-    ("Diamond", 82, 93, "International class", "#4f8dff"),
-    ("Elite", 93, None, "World leading", "#b45bff"),
+    ("Iron", 0, 34, "Building", "#8a919c"),
+    ("Bronze", 34, 44, "Club level", "#b5783c"),
+    ("Silver", 44, 53, "Local class", "#9aa5b1"),
+    ("Gold", 53, 61, "Regional class", "#d9a521"),
+    ("Platinum", 61, 68, "Pace Setter", "#2fb8bf"),
+    ("Emerald", 68, 75, "State Class", "#17b26a"),
+    ("Ruby", 75, 82, "Sub-Elite", "#e03131"),
+    ("Diamond", 82, 89, "National Class", "#4f8dff"),
+    ("Elite", 89, None, "World Class", "#b45bff"),
 ]
 
 WINDOW_SLACK = 1.15  # how far a block of splits may overshoot the target before it stops counting as that effort
