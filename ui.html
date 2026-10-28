@@ -5,12 +5,13 @@
     <title>Endurance Coach</title>
     <style>
       :root {
-        --bg: #f5f6f8;
-        --panel: #fff;
-        --panel2: #f9fafb;
-        --hover: #f2f4f7;
-        --border: #e4e7ec;
-        --border2: #d0d5dd;
+        --bg: #eef1f6;
+        --panel: color-mix(in srgb, #fff 78%, transparent);
+        --panel2: color-mix(in srgb, #f9fafb 80%, transparent);
+        --well: color-mix(in srgb, var(--text) 5%, transparent);
+        --hover: color-mix(in srgb, var(--text) 7%, transparent);
+        --border: color-mix(in srgb, var(--text) 10%, transparent);
+        --border2: color-mix(in srgb, var(--text) 18%, transparent);
         --text: #101828;
         --text2: #344054;
         --muted: #667085;
@@ -19,28 +20,45 @@
         --brand-hover: #005ae0;
         --brand-soft: #e6f0ff;
         --on-brand: #fff;
-        --side: #fcfcfd;
-        --side-border: #e4e7ec;
+        --side: color-mix(in srgb, #fcfcfd 55%, transparent);
+        --side-border: rgba(16, 24, 40, 0.08);
         --side-text: #475467;
         --side-muted: #98a2b3;
-        --side-active: #eef1f5;
+        --side-active: color-mix(in srgb, #fff 48%, transparent);
         --side-active-text: #101828;
         --ok: #0f9d58;
         --warn: #e07800;
         --bad: #e5412d;
         --grid: #eef0f3;
-        --overlay: rgba(16, 24, 40, 0.45);
+        --overlay: rgba(40, 32, 70, 0.22);
         --shadow-lg: 0 12px 32px -8px rgba(16, 24, 40, 0.22), 0 4px 8px -4px rgba(16, 24, 40, 0.08);
-        --r: 10px;
+        --rim: rgba(255, 255, 255, 0.75);
+        --rim-soft: rgba(16, 24, 40, 0.07);
+        --glass-blur: blur(24px) saturate(1.6);
+        --glass-blur-sm: blur(14px) saturate(1.5);
+        /* the diagonal wash every glass panel blurs/tints against - Raven's own "Glass" theme look */
+        --bg-grad: linear-gradient(
+          122deg,
+          #dde8ff 0%,
+          #e7e0ff 24%,
+          #f3dbf2 42%,
+          #ffe3ea 58%,
+          #dff1ee 76%,
+          #dbeaff 100%
+        );
+        --r: 16px;
+        --r-sm: 11px;
+        --r-pill: 999px;
         color-scheme: light;
       }
       [data-theme="dark"] {
-        --bg: #0e1013;
-        --panel: #16181d;
-        --panel2: #1b1e24;
-        --hover: #20242b;
-        --border: #262a31;
-        --border2: #343a44;
+        --bg: #0a0b10;
+        --panel: color-mix(in srgb, #181a22 58%, transparent);
+        --panel2: color-mix(in srgb, #1b1e28 62%, transparent);
+        --well: color-mix(in srgb, #000 22%, transparent);
+        --hover: color-mix(in srgb, #fff 9%, transparent);
+        --border: rgba(255, 255, 255, 0.08);
+        --border2: rgba(255, 255, 255, 0.14);
         --text: #e6e8eb;
         --text2: #c4c9d1;
         --muted: #8a919c;
@@ -49,18 +67,21 @@
         --brand-hover: #63aaff;
         --brand-soft: #132a4a;
         --on-brand: #fff;
-        --side: #121418;
-        --side-border: #23262d;
+        --side: color-mix(in srgb, #10111a 42%, transparent);
+        --side-border: rgba(255, 255, 255, 0.07);
         --side-text: #aeb4be;
         --side-muted: #5f6672;
-        --side-active: #1f2229;
+        --side-active: color-mix(in srgb, #ffffff 12%, transparent);
         --side-active-text: #f1f3f5;
         --ok: #34d17d;
         --warn: #ffa53d;
         --bad: #ff6b57;
         --grid: #20242a;
-        --overlay: rgba(0, 0, 0, 0.6);
+        --overlay: rgba(10, 6, 24, 0.35);
         --shadow-lg: 0 16px 40px -8px rgba(0, 0, 0, 0.7);
+        --rim: rgba(255, 255, 255, 0.12);
+        --rim-soft: rgba(255, 255, 255, 0.07);
+        --bg-grad: linear-gradient(122deg, #1a1040 0%, #2a1456 20%, #3a1457 38%, #1d2a63 58%, #0e3a4f 78%, #0a0b10 100%);
         color-scheme: dark;
       }
       * {
@@ -87,6 +108,20 @@
         background: var(--bg);
         -webkit-font-smoothing: antialiased;
         overflow: hidden;
+        position: relative;
+      }
+      /* the diagonal wash every glass panel blurs/tints against - fixed, cheap, no animation */
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: 0;
+        pointer-events: none;
+        background: var(--bg-grad);
+      }
+      .app {
+        position: relative;
+        z-index: 1;
       }
       button,
       input,
@@ -129,7 +164,10 @@
       }
       .sidebar {
         background: var(--side);
+        backdrop-filter: var(--glass-blur);
+        -webkit-backdrop-filter: var(--glass-blur);
         border-right: 1px solid var(--side-border);
+        box-shadow: inset -1px 0 0 var(--rim-soft);
         color: var(--side-text);
         display: flex;
         flex-direction: column;
@@ -180,12 +218,13 @@
         align-items: center;
         gap: 11px;
         padding: 8px 11px;
-        border-radius: 7px;
+        border-radius: var(--r-pill);
         color: var(--side-text);
         text-decoration: none;
         cursor: pointer;
         margin: 1px 0;
         font-weight: 530;
+        transition: background 0.15s, color 0.15s;
       }
       .nav a:hover {
         background: var(--side-active);
@@ -195,6 +234,7 @@
         background: var(--brand-soft);
         color: var(--brand);
         font-weight: 600;
+        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 22%, transparent);
       }
       .nav a.active svg {
         color: var(--brand);
@@ -204,10 +244,11 @@
         padding: 16px 4px 0;
       }
       .race-mini {
-        border: 1px solid var(--side-border);
-        background: var(--panel);
+        border: 1px solid var(--rim-soft);
+        background: var(--panel2);
         border-radius: var(--r);
         padding: 11px 12px;
+        box-shadow: inset 0 1px 0 var(--rim);
       }
       .race-mini:hover {
         border-color: var(--border2);
@@ -262,7 +303,12 @@
         justify-content: space-between;
         padding: 0 28px;
         background: var(--panel);
+        backdrop-filter: var(--glass-blur);
+        -webkit-backdrop-filter: var(--glass-blur);
         border-bottom: 1px solid var(--border);
+        box-shadow: inset 0 -1px 0 var(--rim-soft);
+        position: relative;
+        z-index: 2;
       }
       .crumb {
         font-size: 12px;
@@ -288,8 +334,9 @@
         width: 32px;
         height: 32px;
         border-radius: 50%;
-        background: var(--hover);
+        background: var(--panel2);
         border: 1px solid var(--border);
+        box-shadow: inset 0 1px 0 var(--rim);
         color: var(--text2);
         display: grid;
         place-items: center;
@@ -335,14 +382,17 @@
         margin-top: 18px;
       }
       .card {
+        position: relative;
         background: var(--panel);
-        border: 1px solid var(--border);
+        backdrop-filter: var(--glass-blur-sm);
+        -webkit-backdrop-filter: var(--glass-blur-sm);
+        border: 1px solid var(--rim-soft);
         border-radius: var(--r);
         min-width: 0;
-        box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+        box-shadow: inset 0 1px 0 var(--rim), 0 1px 2px rgba(16, 24, 40, 0.04), 0 10px 24px -16px rgba(16, 24, 40, 0.18);
       }
       [data-theme="dark"] .card {
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+        box-shadow: inset 0 1px 0 var(--rim), 0 1px 2px rgba(0, 0, 0, 0.25), 0 10px 24px -16px rgba(0, 0, 0, 0.5);
       }
       .card-h {
         display: flex;
@@ -396,18 +446,26 @@
         align-items: center;
         gap: 7px;
         height: 32px;
-        padding: 0 12px;
-        border-radius: 6px;
-        border: 1px solid var(--border2);
-        background: var(--panel);
+        padding: 0 14px;
+        border-radius: var(--r-pill);
+        border: 1px solid var(--rim-soft);
+        background: var(--panel2);
+        backdrop-filter: var(--glass-blur-sm);
+        -webkit-backdrop-filter: var(--glass-blur-sm);
+        box-shadow: inset 0 1px 0 var(--rim);
         cursor: pointer;
         font-weight: 550;
         white-space: nowrap;
         color: var(--text2);
+        transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.15s, box-shadow 0.15s;
       }
       .btn:hover {
         background: var(--hover);
         color: var(--text);
+        transform: translateY(-1px);
+      }
+      .btn:active {
+        transform: translateY(0) scale(0.97);
       }
       .btn:focus-visible,
       .icon-btn:focus-visible,
@@ -419,6 +477,7 @@
         background: var(--brand);
         border-color: var(--brand);
         color: var(--on-brand);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 8px 20px -8px color-mix(in srgb, var(--brand) 65%, transparent);
       }
       .btn.primary:hover {
         background: var(--brand-hover);
@@ -437,7 +496,7 @@
       }
       .btn.sm {
         height: 28px;
-        padding: 0 10px;
+        padding: 0 11px;
         font-size: 12.5px;
       }
       .icon-btn {
@@ -468,14 +527,14 @@
         font-weight: 600;
         white-space: nowrap;
         color: color-mix(in srgb, var(--c) 75%, var(--text));
-        background: color-mix(in srgb, var(--c) 13%, transparent);
-        padding: 2px 8px;
-        border-radius: 5px;
+        background: color-mix(in srgb, var(--c) 15%, transparent);
+        padding: 2px 9px;
+        border-radius: var(--r-pill);
       }
       .badge i {
-        width: 8px;
-        height: 8px;
-        border-radius: 2px;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
         background: var(--c);
       }
       .pill {
@@ -484,8 +543,8 @@
         gap: 5px;
         font-size: 12px;
         font-weight: 550;
-        padding: 1px 8px;
-        border-radius: 4px;
+        padding: 1px 9px;
+        border-radius: var(--r-pill);
         border: 1px solid var(--border);
         color: var(--text2);
         background: var(--panel);
@@ -668,9 +727,11 @@
       .field textarea,
       select.input {
         height: 34px;
-        border: 1px solid var(--border2);
-        border-radius: 6px;
-        background: var(--panel);
+        border: 1px solid var(--rim-soft);
+        border-radius: var(--r-sm);
+        background: var(--well);
+        color: var(--text);
+        box-shadow: inset 0 1px 2px rgba(16, 24, 40, 0.05);
         padding: 0 10px;
         outline: none;
         width: 100%;
@@ -753,11 +814,14 @@
       }
       .seg {
         display: inline-flex;
-        border: 1px solid var(--border2);
-        border-radius: 6px;
+        border: 1px solid var(--rim-soft);
+        border-radius: var(--r-pill);
         overflow: hidden;
         flex-wrap: wrap;
-        background: var(--panel);
+        background: var(--well);
+        backdrop-filter: var(--glass-blur-sm);
+        -webkit-backdrop-filter: var(--glass-blur-sm);
+        box-shadow: inset 0 1px 0 var(--rim);
       }
       .seg label,
       .seg button {
@@ -1409,19 +1473,23 @@
         position: fixed;
         inset: 0;
         background: var(--overlay);
+        backdrop-filter: blur(6px);
+        -webkit-backdrop-filter: blur(6px);
         display: grid;
         place-items: center;
         z-index: 50;
       }
       .modal {
         background: var(--panel);
-        border-radius: 10px;
-        box-shadow: var(--shadow-lg);
+        backdrop-filter: var(--glass-blur);
+        -webkit-backdrop-filter: var(--glass-blur);
+        border-radius: var(--r);
+        box-shadow: inset 0 1px 0 var(--rim), var(--shadow-lg);
         width: min(680px, 94vw);
         max-height: 92vh;
         display: flex;
         flex-direction: column;
-        border: 1px solid var(--border);
+        border: 1px solid var(--rim-soft);
       }
       .modal-h {
         display: flex;
@@ -1446,7 +1514,7 @@
         padding: 12px 18px;
         border-top: 1px solid var(--border);
         background: var(--panel2);
-        border-radius: 0 0 10px 10px;
+        border-radius: 0 0 var(--r) var(--r);
       }
       .estimate {
         margin-top: 16px;
@@ -2831,6 +2899,8 @@
         position: relative;
         margin: 14px 0 5px;
         grid-column: 1/-1;
+        /* the pins straddle the bar, so the row below has to clear the half that hangs underneath */
+        padding-bottom: calc(var(--pin, 24px) / 2 - 3px);
       }
       .ladder-w .ladder,
       .pr .ladder-w .ladder {
@@ -2914,6 +2984,44 @@
         width: 18px;
         height: 18px;
       }
+      .rank-filter {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        margin-top: 18px;
+      }
+      .rank-filter button {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        height: 30px;
+        padding: 0 13px;
+        border-radius: var(--r-pill);
+        border: 1px solid var(--rim-soft);
+        background: var(--panel2);
+        backdrop-filter: var(--glass-blur-sm);
+        -webkit-backdrop-filter: var(--glass-blur-sm);
+        box-shadow: inset 0 1px 0 var(--rim);
+        color: var(--muted);
+        font: inherit;
+        font-size: 13px;
+        font-weight: 550;
+        cursor: pointer;
+      }
+      .rank-filter button:hover {
+        background: var(--hover);
+        color: var(--text);
+      }
+      .rank-filter button.on {
+        background: var(--brand-soft);
+        border-color: color-mix(in srgb, var(--brand) 30%, transparent);
+        color: var(--brand);
+        font-weight: 620;
+      }
+      .rank-filter .sporti svg.i {
+        width: 15px;
+        height: 15px;
+      }
       .prlist {
         display: grid;
         gap: 10px;
@@ -2960,12 +3068,27 @@
         padding: 9px 13px;
         background: var(--panel2);
         opacity: 0.75;
+        /* a row with nothing in it has no reason to stretch to the height of a claimed one beside it */
+        align-self: start;
       }
       .pr .hd {
         display: flex;
         align-items: center;
         gap: 8px;
         min-width: 0;
+      }
+      .pr .chip-go {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+      }
+      .pr .chip-go .chev {
+        color: var(--faint);
+        width: 14px;
+        height: 14px;
+      }
+      .pr:hover .chip-go .chev {
+        color: var(--text2);
       }
       .pr .hd .sporti svg.i {
         width: 18px;
@@ -3110,37 +3233,113 @@
         background: var(--panel);
         font-size: 12.5px;
       }
-      .steps {
+      /* the whole rank ladder. Its own class, not .steps - that one belongs to the setup wizard's stepper.
+   25 rungs as a flat list is a spreadsheet; grouped into their 9 tiers it reads as something you climb */
+      .rankladder {
         display: grid;
-        gap: 1px;
-        background: var(--border);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        margin: 12px 0 6px;
-        overflow: hidden;
+        gap: 5px;
       }
-      .steps div {
+      .rankladder .band {
         display: grid;
-        grid-template-columns: 26px 1fr auto 74px;
+        grid-template-columns: 104px minmax(0, 1fr);
         gap: 10px;
         align-items: center;
-        padding: 7px 12px;
-        background: var(--panel);
-        font-size: 12.5px;
-        font-variant-numeric: tabular-nums;
+        padding: 6px 10px;
+        border: 1px solid var(--rim-soft);
+        border-radius: var(--r-sm);
+        background: var(--panel2);
       }
-      .steps em {
-        font-style: normal;
-        color: var(--muted);
-        text-align: right;
-        font-size: 11.5px;
+      /* tiers already behind you step back so the climb ahead is what stands out */
+      .rankladder .band.done {
+        opacity: 0.5;
       }
-      .steps .here {
-        background: var(--hover);
+      .rankladder .band.cur {
+        background: color-mix(in srgb, var(--c) 11%, transparent);
+        border-color: color-mix(in srgb, var(--c) 38%, transparent);
         box-shadow: inset 3px 0 var(--c);
       }
-      .steps .here span {
+      .rankladder .name {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        min-width: 0;
+        font-size: 12.5px;
+        font-weight: 640;
+        color: var(--c);
+      }
+      .rankladder .name span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .rankladder .you {
+        font-style: normal;
+        font-size: 9.5px;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--on-brand);
+        background: var(--c);
+        border-radius: var(--r-pill);
+        padding: 1px 6px;
+        flex: none;
+      }
+      .rankladder .rungs {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 5px;
+      }
+      .rankladder .band.solo .rungs {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      .rankladder .rung {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 0 6px;
+        align-items: baseline;
+        padding: 4px 8px;
+        border-radius: 8px;
+        border: 1px solid transparent;
+        font-variant-numeric: tabular-nums;
+      }
+      .rankladder .rung em {
+        grid-row: span 2;
+        align-self: center;
+        font-style: normal;
+        font-size: 10.5px;
+        font-weight: 750;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+      }
+      .rankladder .rung b {
+        font-size: 13px;
         font-weight: 650;
+        letter-spacing: -0.01em;
+      }
+      .rankladder .rung i {
+        font-style: normal;
+        font-size: 10.5px;
+        color: var(--muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      /* where you stand, and the one rung that is actually in reach */
+      .rankladder .rung.here {
+        background: color-mix(in srgb, var(--c) 22%, transparent);
+        border-color: var(--c);
+      }
+      .rankladder .rung.here em {
+        color: var(--c);
+      }
+      .rankladder .rung.next {
+        border-style: dashed;
+        border-color: color-mix(in srgb, var(--c) 55%, transparent);
+      }
+      .rankladder-wrap {
+        position: relative;
+        max-height: 330px;
+        overflow-y: auto;
+        margin: 12px 0 6px;
       }
       .rank-facts span {
         color: var(--muted);
@@ -5647,17 +5846,24 @@
                 "",
               )}<span class="todo" style="left:100%" title="${esc(t.next)}">${tierBadge({ tier: t.next, div: "", colour: t.next_colour }, badges + 4)}</span></div>`
             : "";
-        return `${pin ? `<div class="ladder-w">${bar}${pin}</div>` : bar}
+        return `${pin ? `<div class="ladder-w" style="--pin:${badges + 4}px">${bar}${pin}</div>` : bar}
   <div class="ladder-l"><span>${esc(t.tier)}${t.div ? " " + t.div : ""} · ${t.score}</span><span>${t.next ? `${extra || ""}${esc(t.next)} at ${t.next_at}` : "top of the ladder"}</span></div>`;
       };
 
       let RANKS = null;
+      // which discipline the Ranks page is filtered to; shared by the desktop and phone renderers
+      let RANK_SPORT = "All";
       PAGES.ranks = async (c) => {
         const d = (RANKS = await call("records"));
         const ev = (s) => d.events.filter((e) => e.sport === s);
         const groups = [...new Set(d.events.map((e) => e.sport))];
         const o = d.overall,
           rr = d.race_rank;
+        // the page runs past three screens with everything open, so one discipline can be singled out - the
+        // cross-discipline sections (engine, race ranks, bricks, milestones) only mean anything with all of them
+        if (RANK_SPORT !== "All" && !groups.includes(RANK_SPORT)) RANK_SPORT = "All";
+        const all = RANK_SPORT === "All";
+        const show = (s) => all || RANK_SPORT === s;
         c.innerHTML = `<div class="page">
   <div class="card"><div class="card-b">
     ${
@@ -5666,7 +5872,7 @@
       <div class="who"><div class="tier">${esc(o.tier)}${o.div ? `<em>${o.div}</em>` : ""}</div>
         <div class="cls">${o.cls ? esc(o.cls) + " · " : ""}overall rank across ${d.by_sport.length} discipline${d.by_sport.length === 1 ? "" : "s"}</div></div>
       ${MOBILE ? "" : `<div class="sportchips">${d.by_sport.map(sportChip).join("")}</div>`}</div>
-      ${ladder(o)}
+      ${ladder(o, "", MOBILE ? 0 : 26)}
       ${MOBILE && d.by_sport.length ? `<div class="sportchips mt">${d.by_sport.map(sportChip).join("")}</div>` : ""}
       ${
         rr
@@ -5678,17 +5884,32 @@
     }
     <div class="row wrap" style="margin-top:14px;gap:10px">
       <button class="btn sm" onclick="rankLadder()">${I("medal")}See the rank ladder</button>
-      <button class="btn sm" onclick="openEstimator()">${I("clock")}Estimate a time</button>
-      <span class="small muted grow">Graded against world-class standards for a ${d.sex === "F" ? "woman" : "man"} of ${d.age} (age factor ${d.age_factor}).</span></div>
+      <button class="btn sm" onclick="openEstimator()">${I("clock")}Estimate a time</button></div>
+    <div class="small muted" style="margin-top:10px">Graded against fixed world-class standards for a
+      ${d.sex === "F" ? "woman" : "man"} of ${d.age} (age factor ${d.age_factor}) &mdash; never against other people.</div>
   </div></div>
 
   ${
-    d.thresholds.length
+    groups.length > 1
+      ? `<div class="rank-filter" id="rankFilter">${["All", ...groups]
+          .map(
+            (s) =>
+              `<button class="${s === RANK_SPORT ? "on" : ""}" data-chip="${esc(s)}">${s === "All" ? "" : sportIcon(s)}${esc(s)}</button>`,
+          )
+          .join("")}</div>`
+      : ""
+  }
+
+  ${
+    d.thresholds.filter((t) => show(t.sport)).length
       ? `<div class="card mt"><div class="card-h"><div><h3>Engine</h3>
     <div class="sub">What you can hold for an hour &mdash; the number that moves every PR at once</div></div></div>
-    <div class="card-b"><div class="prlist">${d.thresholds.map(thrRow).join("")}</div>
+    <div class="card-b"><div class="prlist">${d.thresholds
+      .filter((t) => show(t.sport))
+      .map(thrRow)
+      .join("")}</div>
     ${
-      d.thresholds.some((t) => t.sport === "Bike")
+      d.thresholds.some((t) => t.sport === "Bike" && show(t.sport))
         ? `<div class="small muted" style="margin-top:10px">${I("info")}
       Your bike rank is the better of FTP and your best 20, 40, 100 or 160 km ride or race. Course, wind and drafting
       move those times, so a hilly or sheltered result is a guide, not a stopwatch.</div>`
@@ -5699,7 +5920,7 @@
   }
 
   ${
-    d.multi.length
+    all && d.multi.length
       ? `<div class="card mt"><div class="card-h"><div><h3>Race ranks</h3>
     <div class="sub">Multisport finishes, graded against world-best times for the distance</div></div></div>
     <div class="card-b"><div class="prlist">${d.multi.map(prRow).join("")}</div>
@@ -5716,10 +5937,13 @@
   }
 
   ${
-    d.off_bike.length
+    d.off_bike.filter((e) => show(e.sport)).length
       ? `<div class="card mt"><div class="card-h"><div><h3>Off the bike</h3>
     <div class="sub">Run splits from your multisport races &mdash; the part bricks are training for</div></div></div>
-    <div class="card-b"><div class="prlist">${d.off_bike.map(prRow).join("")}</div>
+    <div class="card-b"><div class="prlist">${d.off_bike
+      .filter((e) => show(e.sport))
+      .map(prRow)
+      .join("")}</div>
       <div class="small muted" style="margin-top:10px">${I("info")} Graded against world-class triathlon run
         splits, not track records: a run off the bike isn't a standalone run and shouldn't be scored like one.</div>
     </div></div>`
@@ -5727,6 +5951,7 @@
   }
 
   ${groups
+    .filter(show)
     .map(
       (s) => `<div class="card mt"><div class="card-h"><div><h3>${s} bests</h3>
     <div class="sub">From logged sessions, race results and the fastest block inside a longer session</div></div>
@@ -5743,7 +5968,7 @@
     .join("")}
 
   ${
-    d.bricks
+    all && d.bricks
       ? `<div class="card mt"><div class="card-h"><div><h3>${badge("Brick")} Bricks</h3>
     <div class="sub">No rank: a bike-then-run session has no standard to measure against</div></div></div>
     <div class="card-b"><div class="milegrid">
@@ -5758,7 +5983,7 @@
   }
 
   ${
-    d.milestones.length
+    all && d.milestones.length
       ? `<div class="card mt"><div class="card-h"><div><h3>Milestones</h3>
     <div class="sub">Volume and consistency bests &mdash; yours alone, so nothing to rank them against</div></div></div>
     <div class="card-b"><div class="milegrid">${d.milestones
@@ -5771,6 +5996,13 @@
   }
   </div>`;
         $$("#content .pr[data-key]").forEach((b) => (b.onclick = () => prDetail(b.dataset.key)));
+        $$("#rankFilter [data-chip]").forEach(
+          (b) =>
+            (b.onclick = () => {
+              RANK_SPORT = b.dataset.chip;
+              render();
+            }),
+        );
       };
       const rankRows = () => [...RANKS.events, ...RANKS.multi, ...RANKS.off_bike];
       const sportChip = (s) =>
@@ -5781,7 +6013,7 @@
           return `<button class="pr none unclaimed" data-key="${e.sport}:${e.key}" title="${esc(e.hint)}">
     <div class="hd">${sportIcon(e.sport)}<b>${esc(e.label)}</b></div><div class="rt faint">see the times &rsaquo;</div></button>`;
         return `<button class="pr" data-key="${e.sport}:${e.key}">
-    <div class="hd">${sportIcon(e.sport)}<b>${esc(e.label)}</b></div><div>${tierChip(e)}</div>
+    <div class="hd">${sportIcon(e.sport)}<b>${esc(e.label)}</b></div><div class="chip-go">${tierChip(e)}${I("right", "i chev")}</div>
     <div class="t">${esc(e.time)}</div><div class="rt">${esc(e.pace || "")}</div>
     ${ladder(e, e.to_next ? `${e.to_next} to ` : "", 20)}
     <div class="sub">${[
@@ -5808,18 +6040,40 @@
       }
 
       function stepsTable(e) {
-        const here = (x) => e.have && x.tier === e.tier && x.div === e.div;
-        return `<div class="steps">${e.steps
-          .map(
-            (x) => `<div class="${here(x) ? "here" : ""}" style="--c:${x.colour}">
-    ${tierBadge(x, 26)}<span>${esc(x.tier)}${x.div ? " " + x.div : ""}</span><b>${esc(x.time)}</b><em>${esc(x.pace || "")}</em></div>`,
-          )
-          .join("")}</div>
+        const at = e.have ? e.steps.findIndex((x) => x.tier === e.tier && x.div === e.div) : -1;
+        // the flat run of rungs comes back tier by tier, so a fold over it rebuilds the nine tiers
+        const bands = [];
+        e.steps.forEach((x, i) => {
+          const b = bands[bands.length - 1];
+          if (b && b.tier === x.tier) b.rungs.push({ ...x, i });
+          else bands.push({ tier: x.tier, colour: x.colour, rungs: [{ ...x, i }] });
+        });
+        const rung = (r) => {
+          // with nothing logged there is no "next" rung to chase - Iron is the floor, not a target
+          const state = at < 0 ? "" : r.i === at ? "here" : r.i < at ? "done" : r.i === at + 1 ? "next" : "";
+          return `<div class="rung ${state}">${r.div ? `<em>${r.div}</em>` : "<em></em>"}
+      <b>${esc(r.time)}</b>${r.pace ? `<i>${esc(r.pace)}</i>` : ""}</div>`;
+        };
+        return `<div class="rankladder-wrap"><div class="rankladder">${bands
+          .map((b) => {
+            const cur = b.rungs.some((r) => r.i === at);
+            const state = cur ? "cur" : at > -1 && b.rungs.every((r) => r.i < at) ? "done" : "";
+            return `<div class="band ${state}${b.rungs.length === 1 ? " solo" : ""}" style="--c:${b.colour}">
+      <div class="name">${tierBadge({ tier: b.tier, div: "", colour: b.colour }, 24)}<span>${esc(b.tier)}</span>${cur ? '<i class="you">you</i>' : ""}</div>
+      <div class="rungs">${b.rungs.map(rung).join("")}</div></div>`;
+          })
+          .join("")}</div></div>
     <div class="small muted">The time that just reaches each rank, for your age and sex. Iron is anything slower than Bronze III.</div>`;
       }
+      // the ladder opens where you already stand, not down at Iron
+      const scrollToHere = (root) => {
+        const wrap = $(".rankladder-wrap", root),
+          cur = wrap && $(".band.cur", wrap);
+        if (cur) wrap.scrollTop = Math.max(0, cur.offsetTop - wrap.clientHeight / 2 + cur.offsetHeight / 2);
+      };
 
       function prTargets(e) {
-        modal(
+        const m = modal(
           `<div class="modal-h"><h3>${badge(e.sport)}${esc(e.label)}</h3><button class="icon-btn" data-close>${I("x")}</button></div>
     <div class="modal-b">
       <div class="small muted" style="margin-bottom:10px">${esc(e.hint)}</div>
@@ -5828,6 +6082,7 @@
     <div class="modal-f"><span class="grow"></span><button class="btn" data-close>Close</button></div>`,
           { width: 520 },
         );
+        scrollToHere(m);
       }
 
       function prDetail(key) {
@@ -5874,6 +6129,7 @@
         btn.onclick = () => {
           box.hidden = !box.hidden;
           btn.lastChild.textContent = box.hidden ? "Show the time for every rank" : "Hide the times";
+          if (!box.hidden) scrollToHere(box);
         };
       }
 
@@ -9698,7 +9954,6 @@
       };
 
       // ---- ranks: the overall rank and discipline ranks lead; every effort is one tappable row with its badge
-      let MCR_SPORT = "All";
       const mcrTier = (t) => `${esc(t.tier)}${t.div ? " " + t.div : ""}`;
       function mcrRow(e) {
         if (!e.have)
@@ -9721,8 +9976,8 @@
         const o = d.overall,
           rr = d.race_rank;
         const groups = [...new Set(d.events.map((e) => e.sport))];
-        if (MCR_SPORT !== "All" && !d.by_sport.some((s) => s.sport === MCR_SPORT)) MCR_SPORT = "All";
-        const show = (s) => MCR_SPORT === "All" || MCR_SPORT === s;
+        if (RANK_SPORT !== "All" && !d.by_sport.some((s) => s.sport === RANK_SPORT)) RANK_SPORT = "All";
+        const show = (s) => RANK_SPORT === "All" || RANK_SPORT === s;
         const chips = ["All", ...d.by_sport.map((s) => s.sport)];
         c.innerHTML = `<div class="page">
   <div class="mday"><b>Your ranks</b><span>Graded for a ${d.sex === "F" ? "woman" : "man"} of ${d.age}</span></div>
@@ -9759,23 +10014,23 @@
       : ""
   }
 
-  ${d.by_sport.length > 1 ? `<div class="mchips" id="mrkChips">${chips.map((s) => `<button class="${s === MCR_SPORT ? "on" : ""}" data-chip="${esc(s)}">${esc(s)}</button>`).join("")}</div>` : ""}
+  ${d.by_sport.length > 1 ? `<div class="mchips" id="mrkChips">${chips.map((s) => `<button class="${s === RANK_SPORT ? "on" : ""}" data-chip="${esc(s)}">${esc(s)}</button>`).join("")}</div>` : ""}
 
   ${
-    d.thresholds.length && MCR_SPORT === "All"
+    d.thresholds.length && RANK_SPORT === "All"
       ? `<div class="msec"><h3>Engine</h3><div class="mlist">${d.thresholds.map(mcrThr).join("")}</div>
     <p class="small muted mcr-note">Your bike rank is the better of FTP and your best 20, 40, 100 or 160 km ride or race. Hills and drafting move those times, so read them as a guide.</p></div>`
       : ""
   }
 
   ${
-    d.multi.length && MCR_SPORT === "All"
+    d.multi.length && RANK_SPORT === "All"
       ? `<div class="msec" id="mrk-race"><h3>Race ranks</h3><div class="mlist">${d.multi.map(mcrRow).join("")}</div>
     <p class="small muted mcr-note">Courses differ far more than a track does, so read these as a guide, not a stopwatch.</p></div>`
       : ""
   }
 
-  ${d.off_bike.length && MCR_SPORT === "All" ? `<div class="msec"><h3>Off the bike</h3><div class="mlist">${d.off_bike.map(mcrRow).join("")}</div></div>` : ""}
+  ${d.off_bike.length && RANK_SPORT === "All" ? `<div class="msec"><h3>Off the bike</h3><div class="mlist">${d.off_bike.map(mcrRow).join("")}</div></div>` : ""}
 
   ${groups
     .filter(show)
@@ -9789,7 +10044,7 @@
     .join("")}
 
   ${
-    MCR_SPORT === "All" && d.bricks
+    RANK_SPORT === "All" && d.bricks
       ? `<div class="msec"><h3>Bricks</h3><div class="mcard"><div class="p">
     <div class="mcr-facts"><div><b>${d.bricks.count}</b><span>logged</span></div><div><b>${d.bricks.recent}</b><span>last 8 wks</span></div><div><b>${esc(d.bricks.longest)}</b><span>longest</span></div></div>
     <p class="small muted" style="margin:10px 0 0">No rank for a brick itself &mdash; it shows up in your off-the-bike run and race rank.</p></div></div></div>`
@@ -9797,7 +10052,7 @@
   }
 
   ${
-    MCR_SPORT === "All" && d.milestones.length
+    RANK_SPORT === "All" && d.milestones.length
       ? `<div class="msec"><h3>Milestones</h3>
     <details class="mfold" data-fold="ranks.miles"><summary><span class="grow">Volume and consistency<small>${d.milestones.length} personal bests</small></span>${I("right", "i chev")}</summary>
       <div class="body"><div class="milegrid" style="margin-top:12px">${d.milestones.map((m) => `<div class="mile"><div class="l">${esc(m.label)}</div><b>${esc(m.value)}</b><div class="s">${esc(m.sub)}</div></div>`).join("")}</div></div></details></div>`
@@ -9811,14 +10066,14 @@
         $$("#content [data-sport]").forEach(
           (b) =>
             (b.onclick = () => {
-              MCR_SPORT = b.dataset.sport;
+              RANK_SPORT = b.dataset.sport;
               render();
             }),
         );
         $$("#mrkChips [data-chip]").forEach(
           (b) =>
             (b.onclick = () => {
-              MCR_SPORT = b.dataset.chip;
+              RANK_SPORT = b.dataset.chip;
               render();
             }),
         );
