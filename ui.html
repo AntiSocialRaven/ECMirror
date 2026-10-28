@@ -856,6 +856,15 @@
         background: var(--side-active);
         color: var(--text);
       }
+      /* two views sharing one slot: the halves fill the row so the switch reads as a switch */
+      .seg.split {
+        display: flex;
+        width: 100%;
+      }
+      .seg.split button {
+        flex: 1;
+        justify-content: center;
+      }
       .seg.rate {
         display: grid;
         grid-template-columns: repeat(5, 1fr);
@@ -2208,7 +2217,7 @@
         height: 20px;
       }
       html.mobile .content {
-        padding: 12px 12px calc(84px + env(safe-area-inset-bottom));
+        padding: 12px 12px calc(84px + env(safe-area-inset-bottom) + var(--kb, 0px));
       }
       html.mobile .g2,
       html.mobile .g3,
@@ -2348,14 +2357,17 @@
       html.mobile .splitin input {
         padding-right: 10px !important;
       }
+      /* --kb is how much of the window the on-screen keyboard is covering, measured in wireKeyboard(). The
+   sheet sits on the bottom edge, which is exactly where the keyboard lands, so it has to be lifted clear. */
       html.mobile .overlay {
         place-items: end stretch;
         grid-template-columns: minmax(0, 1fr);
+        padding-bottom: var(--kb, 0px);
       }
       html.mobile .modal {
         min-width: 0;
         width: 100% !important;
-        max-height: 94vh;
+        max-height: min(94vh, calc(var(--vvh, 100vh) - 10px));
         border-radius: 14px 14px 0 0;
         border-bottom: 0;
       }
@@ -6094,7 +6106,11 @@
       <div class="rank-hero">${tierBadge(e, 64)}<div class="who">
         <div class="tier">${esc(e.time)}</div><div class="cls">${e.pace ? esc(e.pace) + " · " : ""}${esc(e.tier)}${e.div ? " " + e.div : ""}${e.cls ? " · " + esc(e.cls) : ""}</div></div></div>
       ${ladder(e, e.to_next ? `${e.to_next} to ` : "", 26)}
-      <div class="rank-facts">
+      <div class="seg split mt" id="prTabs" role="tablist">
+        <button class="on" data-tab="facts">${I("info")}This effort</button>
+        <button data-tab="steps">${I("medal")}Every rank</button></div>
+      <div id="prFacts">
+        <div class="rank-facts">
         ${[
           ["Score", `${e.score} / 100`],
           [
@@ -6114,23 +6130,28 @@
         ]
           .map(([k, v]) => `<div><span>${esc(k)}</span><b>${esc(v)}</b></div>`)
           .join("")}
+        </div>
+        <div class="small muted mt">Beating this means a faster logged session, a race result, or a faster block
+          inside a longer run &mdash; all three count.</div>
       </div>
-      <button class="btn sm mt" id="stepsBtn">${I("medal")}Show the time for every rank</button>
-      <div id="stepsBox" hidden>${stepsTable(e)}</div>
-      <div class="small muted mt">Beating this means a faster logged session, a race result, or a faster block
-        inside a longer run &mdash; all three count.</div>
+      <div id="prSteps" hidden>${stepsTable(e)}</div>
     </div>
     <div class="modal-f"><span class="grow"></span><button class="btn" data-close>Close</button>
       <button class="btn primary" onclick="closeModal();go('log')">Open training log</button></div>`,
           { width: 520 },
         );
-        const btn = $("#stepsBtn"),
-          box = $("#stepsBox");
-        btn.onclick = () => {
-          box.hidden = !box.hidden;
-          btn.lastChild.textContent = box.hidden ? "Show the time for every rank" : "Hide the times";
-          if (!box.hidden) scrollToHere(box);
-        };
+        // one view at a time: on a phone the two stacked meant the ladder pushed everything around
+        const tabs = $$("#prTabs [data-tab]");
+        tabs.forEach(
+          (b) =>
+            (b.onclick = () => {
+              const steps = b.dataset.tab === "steps";
+              tabs.forEach((x) => x.classList.toggle("on", x === b));
+              $("#prFacts").hidden = steps;
+              $("#prSteps").hidden = !steps;
+              if (steps) scrollToHere($("#prSteps"));
+            }),
+        );
       }
 
       async function openEstimator() {
@@ -10924,11 +10945,53 @@
         };
       };
 
+      // iOS slides the keyboard over the page rather than reflowing it, and this shell is position:fixed with
+      // its own scrollers - so nothing moves on its own and a field in the lower half simply sits behind the
+      // keyboard. Measure the overlap for the CSS above, then scroll the field's own scroller until it clears.
+      const KB_FIELD = "input:not([type=checkbox]):not([type=radio]), textarea, select, [contenteditable]";
+      function wireKeyboard() {
+        const vv = window.visualViewport;
+        if (!vv) return;
+        const root = document.documentElement;
+        let t = 0;
+        const reveal = () => {
+          const el = document.activeElement;
+          if (!el || !el.matches || !el.matches(KB_FIELD)) return;
+          const r = el.getBoundingClientRect(),
+            top = vv.offsetTop + 12,
+            bottom = vv.offsetTop + vv.height - 12;
+          const by = r.bottom > bottom ? r.bottom - bottom : r.top < top ? r.top - top : 0;
+          if (!by) return;
+          for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+            const oy = getComputedStyle(p).overflowY;
+            if ((oy === "auto" || oy === "scroll") && p.scrollHeight > p.clientHeight) {
+              const was = p.scrollTop;
+              p.scrollTop += by;
+              if (p.scrollTop !== was) return;
+            }
+          }
+        };
+        const after = (ms) => {
+          clearTimeout(t);
+          t = setTimeout(reveal, ms);
+        };
+        const sync = () => {
+          root.style.setProperty("--kb", Math.max(0, window.innerHeight - vv.height - vv.offsetTop) + "px");
+          root.style.setProperty("--vvh", vv.height + "px");
+          after(60);
+        };
+        vv.addEventListener("resize", sync);
+        // tapping straight from one field to the next never resizes anything - the keyboard is already up
+        document.addEventListener("focusin", (e) => e.target.matches && e.target.matches(KB_FIELD) && after(250));
+        sync();
+      }
+
       // ------------------------------------------------------------------ boot
       async function init() {
         API = window.pywebview.api;
         BOOT = await call("boot");
         if (!MOBILE) setTimeout(() => checkUpdates().catch(() => {}), 4000);
+        if (MOBILE) wireKeyboard();
         buildNav();
         shell();
         const last = store.get("page", "dashboard");
