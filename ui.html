@@ -4865,7 +4865,116 @@
         height: 11px;
         border-radius: 50%;
       }
+
+      /* ---------------------------------------------------------------- the flat skin
+   The look the app had before the glass pass: no wash behind the panels, no blur through them, square
+   corners and solid fills. Only paint - every layout, control and behaviour is shared with the glass skin.
+   Picked in Profile & settings; the snippet below <style> applies it before the first paint. */
+      [data-skin="flat"] {
+        --bg: #f5f6f8;
+        --panel: #fff;
+        --panel2: #f9fafb;
+        --well: #fff;
+        --hover: #f2f4f7;
+        --border: #e4e7ec;
+        --border2: #d0d5dd;
+        --side: #fcfcfd;
+        --side-border: #e4e7ec;
+        --side-active: #eef1f5;
+        --overlay: rgba(16, 24, 40, 0.45);
+        --rim: transparent;
+        --rim-soft: #e4e7ec;
+        --glass-blur: none;
+        --glass-blur-sm: none;
+        --r: 10px;
+        --r-sm: 6px;
+        --r-pill: 6px;
+      }
+      [data-skin="flat"][data-theme="dark"] {
+        --bg: #0e1013;
+        --panel: #16181d;
+        --panel2: #1b1e24;
+        --well: #16181d;
+        --hover: #20242b;
+        --border: #262a31;
+        --border2: #343a44;
+        --side: #121418;
+        --side-border: #23262d;
+        --side-active: #1f2229;
+        --overlay: rgba(0, 0, 0, 0.6);
+        --rim: transparent;
+        --rim-soft: #262a31;
+      }
+      [data-skin="flat"] body::before {
+        display: none;
+      }
+      [data-skin="flat"] .sidebar,
+      [data-skin="flat"] .topbar,
+      [data-skin="flat"] .nav a.active,
+      [data-skin="flat"] .race-mini,
+      [data-skin="flat"] .avatar,
+      [data-skin="flat"] .seg,
+      [data-skin="flat"] .btn.primary {
+        box-shadow: none;
+      }
+      [data-skin="flat"] .card {
+        border-color: var(--border);
+        box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+      }
+      [data-skin="flat"][data-theme="dark"] .card {
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+      }
+      [data-skin="flat"] .btn {
+        background: var(--panel);
+        border-color: var(--border2);
+        box-shadow: none;
+        transition: none;
+      }
+      [data-skin="flat"] .btn:hover,
+      [data-skin="flat"] .btn:active {
+        transform: none;
+      }
+      [data-skin="flat"] .seg,
+      [data-skin="flat"] .rank-filter button {
+        background: var(--panel);
+        border-color: var(--border2);
+      }
+      [data-skin="flat"] .input,
+      [data-skin="flat"] .field input:not([type="range"]):not([type="radio"]):not([type="checkbox"]),
+      [data-skin="flat"] .field select,
+      [data-skin="flat"] .field textarea,
+      [data-skin="flat"] select.input {
+        border-color: var(--border2);
+        box-shadow: none;
+      }
+      [data-skin="flat"] .overlay {
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+      }
+      [data-skin="flat"] .modal {
+        border-color: var(--border);
+        box-shadow: var(--shadow-lg);
+      }
+      [data-skin="flat"] .nav a {
+        border-radius: 7px;
+      }
+      [data-skin="flat"] .badge {
+        border-radius: 5px;
+      }
+      [data-skin="flat"] .badge i {
+        border-radius: 2px;
+      }
+      [data-skin="flat"] .pill {
+        border-radius: 4px;
+      }
     </style>
+    <script>
+      // before the first paint, so changing skin is not a flash of the other one
+      try {
+        if (JSON.parse(localStorage.getItem("ec.skin") || '"glass"') === "flat")
+          document.documentElement.dataset.skin = "flat";
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div class="app">
@@ -5567,6 +5676,12 @@
         applyTheme();
         await call("set_theme", BOOT.theme);
       };
+      // paint only, so it stays on this device rather than travelling with the profile
+      const skin = () => store.get("skin", "glass");
+      function applySkin() {
+        document.documentElement.dataset.skin = skin();
+        CHARTS.forEach((f) => f());
+      }
 
       // ------------------------------------------------------------------ dashboard
       // ------------------------------------------------------------------ coach
@@ -8907,6 +9022,7 @@
         <div class="small muted desktop-only">Version <b>${esc(BOOT.version || "")}</b> · data file: <code>${esc(info.path)}</code></div>
         <div class="small muted desktop-only" style="margin-top:6px">${info.backups} automatic backup${info.backups === 1 ? "" : "s"} (one per launch, newest 20 kept)${info.last_backup ? ` · latest <code>${esc(info.last_backup)}</code>` : ""}</div>
         <div class="row wrap" style="margin-top:14px"><button type="button" class="btn" onclick="openSetup()">${I("refresh")}Run setup again</button><button type="button" class="btn" id="expAll">${I("down")}Export all data</button><button type="button" class="btn" id="impAll">${I("up")}Restore from export</button><button type="button" class="btn desktop-only" id="openDir">${I("folder")}Open data folder</button></div></div></div>
+    <div class="card" id="skinCard"></div>
     <div class="card desktop-only" id="updateCard"></div>
     <div class="card mobile-only" id="appSrcCard"></div>
     <div class="card" id="syncCard" style="grid-column:1/-1"></div>
@@ -8924,6 +9040,7 @@
         };
         $("#pfReset").onclick = () => render(true);
         $("#openDir").onclick = () => call("open_data_folder");
+        drawSkin();
         MOBILE ? (drawPhoneSync(), drawAppSource(), drawHealth()) : (drawHub(), drawUpdates());
         $("#expAll").onclick = async () => {
           const r = await call("export_all");
@@ -9685,6 +9802,34 @@
           "Picks up published changes to the screens and engine without an App Store update.",
         ],
       ];
+      function drawSkin() {
+        const cur = skin();
+        $("#skinCard").innerHTML = `<div class="card-h"><div><h3>${I("sun")} Appearance</h3>
+      <div class="sub">How the app is painted. Every screen, control and number stays exactly where it is.</div></div></div>
+    <div class="card-b"><div class="seg split" id="skinSeg">
+      ${[
+        ["glass", "Glass", "Tinted panels over a colour wash"],
+        ["flat", "Flat", "The plain look from before"],
+      ]
+        .map(
+          ([v, n]) => `<button type="button" class="${cur === v ? "on" : ""}" data-skin="${v}">${esc(n)}</button>`,
+        )
+        .join("")}</div>
+      <div class="small muted" style="margin-top:10px">${
+        cur === "glass"
+          ? "Panels are translucent and pick up the wash behind them."
+          : "Solid panels, square corners, no blur &mdash; the look from before the restyle."
+      }</div></div>`;
+        $$("#skinSeg [data-skin]").forEach(
+          (b) =>
+            (b.onclick = () => {
+              store.set("skin", b.dataset.skin);
+              applySkin();
+              drawSkin();
+            }),
+        );
+      }
+
       async function drawAppSource() {
         const st = await call("assets_state");
         const live = st.live,
