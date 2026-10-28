@@ -395,6 +395,7 @@ MET = {
 # the half and marathon. Swimming: long-course freestyle world records. Plain constants: edit when a record falls.
 REF_TIMES = {
     ("Run", "1mi"): (223.13, 247.64),
+    ("Run", "2mi"): (474.10, 538.58),
     ("Run", "5k"): (755.36, 840.21),
     ("Run", "10k"): (1571.0, 1734.14),
     ("Run", "half"): (3402.0, 3772.0),
@@ -415,6 +416,7 @@ REF_TIMES = {
 
 RECORD_EVENTS = [  # sport, key, label, km - the distances a best effort is hunted for
     ("Run", "1mi", "1 mile", 1.609344),
+    ("Run", "2mi", "2 mile", 3.218688),
     ("Run", "5k", "5K", 5.0),
     ("Run", "10k", "10K", 10.0),
     ("Run", "half", "Half marathon", 21.0975),
@@ -491,14 +493,14 @@ AGE_CURVE = [
 # record-holder. A locally competitive runner, clearly ahead of most of a real field, read as barely above
 # Iron. These bands are re-spaced so a strong-but-human performance lands where it reads as strong.
 TIERS = [
-    ("Iron",     0,  34, "Developing Class", "#8a919c"),
-    ("Bronze",  34,  44, "Recreational Class", "#b5783c"),
-    ("Silver",  44,  53, "Local Class", "#9aa5b1"),
-    ("Gold",    53,  61, "Regional Class", "#d9a521"),
-    ("Platinum",61,  68, "Competitive Class", "#2fb8bf"),
-    ("Emerald", 68,  75, "State Class", "#17b26a"),
-    ("Ruby",    75,  82, "Sub-Elite Class", "#e03131"),
-    ("Diamond", 82,  89, "National Class", "#4f8dff"),
+    ("Iron",     0,  34, "", "#8a919c"),
+    ("Bronze",  34,  44, "", "#b5783c"),
+    ("Silver",  44,  53, "", "#9aa5b1"),
+    ("Gold",    53,  61, "", "#d9a521"),
+    ("Platinum",61,  68, "", "#2fb8bf"),
+    ("Emerald", 68,  75, "", "#17b26a"),
+    ("Ruby",    75,  82, "", "#e03131"),
+    ("Diamond", 82,  89, "", "#4f8dff"),
     ("Elite",   89, None, "World Class", "#b45bff"),
 ]
 
@@ -898,6 +900,7 @@ COPY = {
     "pr.source.logged": "Logged session",
     "pr.source.adjusted": "Logged as {logged}, adjusted",
     "pr.source.block": "Best block of a longer session",
+    "pr.source.pace": "Average pace of a {dist} session",
     "pr.source.profile": "Profile benchmark race",
 }
 
@@ -1356,7 +1359,26 @@ def riegel(d1, t1, d2, k=1.06):
     return t
 
 
-def run_anchor(p):
+_RUN_ANCHORS = []  # (km, secs): the best logged run at each standard distance in the last year
+
+
+def best_run_anchors(found):
+    """The fastest dated run effort per standard distance within a year. Older ones say little about today, and the
+    profile's benchmark race (undated) is only a fallback for someone with nothing recent logged."""
+    cutoff = (dt.date.today() - dt.timedelta(days=365)).isoformat()
+    out = []
+    for sport, key, _, km in RECORD_EVENTS:
+        recent = [secs for secs, date, _ in found.get((sport, key), []) if date and date >= cutoff]
+        if sport == "Run" and recent:
+            out.append((km, min(recent)))
+    return out
+
+
+def run_anchor(p, km=None):
+    """The (distance, time) a run prediction is scaled from: your best recent effort nearest the distance asked
+    for, else the profile's recent race, else threshold pace as a one-hour effort."""
+    if _RUN_ANCHORS and not p.get("_no_anchor"):
+        return min(_RUN_ANCHORS, key=lambda a: (abs(math.log((km or 10.0) / a[0])), a[1]))
     if p["recent_race_km"] > 0 and p["recent_race_s"] > 0:
         return p["recent_race_km"], p["recent_race_s"]
     return 3600 / p["run_thr_pace"], 3600.0  # threshold pace ~ 1 h race pace
@@ -1392,7 +1414,7 @@ def predict(p, race, ctl):
                 h = secs / 3600
             seg.update(secs=secs, IF=round(IF, 2), watts=watts, pace=f"{speed_ui(km / h)} · {watts:.0f} W")
         elif sport == "Run":
-            d1, t1 = run_anchor(p)
+            d1, t1 = run_anchor(p, km)
             fresh = riegel(d1, t1, km)
             prior_h = elapsed / 3600
             fade = 1 + (0.03 + 0.018 * prior_h if i else 0) - (fit if i else fit / 2)
@@ -1650,10 +1672,15 @@ def _efforts(rows, races, p):
                 continue
             d = w["dist_km"] or 0
             splits = json.loads(w["splits"]) if w["splits"] else None
+            t = None
             if splits and d >= km:
                 t = _best_window(splits, km)
                 if t:
                     add((sport, key), t, w["date"], say("pr.source.block"))
+            if not splits and event_window(km, sport)[1] < d <= km * 3:
+                # a longer run at this average pace means some stretch of it was at least that fast: a safe floor,
+                # and never an overstatement, so it counts until real splits show something quicker
+                add((sport, key), w["dur_s"] * km / d, w["date"], say("pr.source.pace", dist=leg_label(sport, d)))
             if d and counts_as(d, km, sport):  # logged as that distance: the clean case
                 adj = _scale(w["dur_s"], d, km)
                 add(
@@ -1769,20 +1796,10 @@ def _multi_efforts(races):
     return multi, off
 
 
-def _ranked(hits, ref, p, label, **extra):
-    """One ranked row from a list of (secs, date, source): the best, what it beat, and what the next tier costs.
-
-    "Previous best" is the next best effort you have, not the one that happened to be most recent before it.
-    Entering an old PR after the fact is a normal thing to do, and it should still tell you what it beat.
-    """
-    ranked = sorted(hits)
-    secs, date, src = ranked[0]
-    prev = ranked[1][0] if len(ranked) > 1 else None
+def _steps(ref, p, sport, km):
+    """Every division's entry time, best first; Iron has no floor worth quoting."""
     af = age_factor(p.get("age", 30))
-    t = tier_of(ref / max(1.0, secs * af) * 100)
-    goal = ref / (t["next_at"] / 100) / af if t["next_at"] else None
-    km = extra.get("km")
-    steps = []  # every division's entry time, best first; Iron has no floor worth quoting
+    steps = []
     for name, lo, hi, _, colour in reversed(TIERS):
         if lo <= 0:
             continue
@@ -1796,9 +1813,26 @@ def _ranked(hits, ref, p, label, **extra):
                     colour=colour,
                     at=round(at, 1),
                     time=hms(need),
-                    pace=event_pace(extra["sport"], need, km) if km else "",
+                    pace=event_pace(sport, need, km) if km else "",
                 )
             )
+    return steps
+
+
+def _ranked(hits, ref, p, label, **extra):
+    """One ranked row from a list of (secs, date, source): the best, what it beat, and what the next tier costs.
+
+    "Previous best" is the next best effort you have, not the one that happened to be most recent before it.
+    Entering an old PR after the fact is a normal thing to do, and it should still tell you what it beat.
+    """
+    ranked = sorted(hits)
+    secs, date, src = ranked[0]
+    prev = ranked[1][0] if len(ranked) > 1 else None
+    af = age_factor(p.get("age", 30))
+    t = tier_of(ref / max(1.0, secs * af) * 100)
+    goal = ref / (t["next_at"] / 100) / af if t["next_at"] else None
+    km = extra.get("km")
+    steps = _steps(ref, p, extra["sport"], km)
     return dict(
         label=label,
         have=True,
@@ -1876,6 +1910,7 @@ def records(rows, races, p):
                         km=km,
                         have=False,
                         score=0,
+                        steps=_steps(ref_for(p, (sport, key)), p, sport, km),
                         hint=_near_hint(sport, label, km, miss) if miss else say("pr.unclaimed", label=label),
                     )
                 )
@@ -1902,7 +1937,15 @@ def records(rows, races, p):
             )
         elif race_focus([s for s, _ in PRESETS[preset][1]]) in _my_focus(p):
             multi.append(
-                dict(sport=kind, key=key, label=label, have=False, score=0, hint=say("pr.unclaimed.multi", label=label))
+                dict(
+                    sport=kind,
+                    key=key,
+                    label=label,
+                    have=False,
+                    score=0,
+                    steps=_steps(ref[1] if _female(p) else ref[0], p, kind, None),
+                    hint=say("pr.unclaimed.multi", label=label),
+                )
             )
     off = [
         _ranked(
@@ -3900,7 +3943,8 @@ def sess_ref(s):
 
 
 def _nice_date(d):
-    return f"{d:%a, %b} {d.day}"
+    year = f", {d.year}" if (dt.date.today() - d).days > 365 else ""  # a date over a year back needs its year
+    return f"{d:%a, %b} {d.day}{year}"
 
 
 class Api:
@@ -3910,6 +3954,7 @@ class Api:
         self._path = db_path
         self._lock = threading.RLock()
         self._undo, self._undo_seq = {}, 0
+        self._anchor_key = None
         self._wx = None  # latest forecast (Open-Meteo hourly, last ~3 months + next 10 days), handed over by the UI
         self._hub = None
         self._window = None
@@ -3920,7 +3965,12 @@ class Api:
 
     # ---- internals
     def _workouts(self):
-        return self._db.execute("SELECT * FROM workouts ORDER BY date DESC, id DESC").fetchall()
+        rows = self._db.execute("SELECT * FROM workouts ORDER BY date DESC, id DESC").fetchall()
+        key = (tuple((w["id"], w["date"], w["dur_s"], w["dist_km"], w["sport"]) for w in rows), P["recent_race_km"])
+        if key != self._anchor_key:  # predictions read the run anchor, so it has to follow the log
+            self._anchor_key = key
+            _RUN_ANCHORS[:] = best_run_anchors(_efforts(rows, self._races(forecast=False), P)[0])
+        return rows
 
     def _wellness(self):
         return self._db.execute("SELECT * FROM wellness ORDER BY date DESC").fetchall()
@@ -4875,9 +4925,8 @@ class Api:
             pacing.append(dict(leg=sp, target=tgt, items=items))
         runs = []
         if "Run" in P["sports"] or any(l["sport"] == "Run" for l in r["legs"]):
-            d1, t1 = run_anchor(P)
             runs = [
-                dict(name=n, time=hms(riegel(d1, t1, d)), pace=fd("pace", riegel(d1, t1, d) / d))
+                dict(name=n, time=hms(riegel(*run_anchor(P, d), d)), pace=fd("pace", riegel(*run_anchor(P, d), d) / d))
                 for n, d in [("5K", 5), ("10K", 10), ("Half marathon", 21.0975), ("Marathon", 42.195), ("50K", 50)]
             ]
         needle = []
@@ -4897,6 +4946,7 @@ class Api:
                 q[key] += delta
                 if key == "run_thr_pace":
                     q["recent_race_km"] = 0
+                    q["_no_anchor"] = True
                 gain = pr["total"] - predict(q, r, ctl_race)["total"]
                 if gain > 0.5:
                     needle.append(dict(label=label, secs=round(gain), time=hms(gain)))
@@ -4969,7 +5019,11 @@ class Api:
             pacing=pacing,
             fueling=race_fueling(P, r, pr),
             runs=runs,
-            anchor="your recent race" if P["recent_race_km"] > 0 else "threshold pace ≈ 1 h race pace",
+            anchor=(
+                "your best recent efforts"
+                if _RUN_ANCHORS
+                else "your recent race" if P["recent_race_km"] > 0 else "threshold pace ≈ 1 h race pace"
+            ),
             needle=needle,
             backyard=backyard,
             goal=goal,

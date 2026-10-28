@@ -2827,18 +2827,66 @@
         background: var(--c);
         transition: width 0.5s ease;
       }
-      .ladder-b {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-end;
-        margin: 12px 0 -4px;
+      .ladder-w {
+        position: relative;
+        margin: 14px 0 5px;
+        grid-column: 1/-1;
       }
-      .ladder-b .todo {
-        opacity: 0.38;
-        filter: grayscale(0.6);
+      .ladder-w .ladder,
+      .pr .ladder-w .ladder {
+        margin: 0;
+      }
+      .ladder-b > span {
+        position: absolute;
+        top: 3.5px;
+        transform: translate(-50%, -50%);
+        line-height: 0;
+        border-radius: 50%;
+        background: var(--panel);
+      }
+      .ladder-b > span:first-child {
+        transform: translate(0, -50%);
+      }
+      .ladder-b > span:last-child {
+        transform: translate(-100%, -50%);
+      }
+      .pr:hover .ladder-b > span {
+        background: var(--hover);
+      }
+      .ladder-b .done svg {
+        opacity: 0.7;
+      }
+      .ladder-b .todo svg {
+        opacity: 0.35;
+      }
+      .ladder-b svg.ring {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        pointer-events: none;
+        overflow: visible;
       }
       .ladder-b .here {
-        filter: drop-shadow(0 0 5px var(--c));
+        isolation: isolate;
+      }
+      .ladder-b .here::before {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: var(--rd);
+        height: var(--rd);
+        transform: translate(-50%, -50%);
+        border-radius: 50%;
+        background: var(--panel);
+        z-index: -1;
+      }
+      .pr:hover .ladder-b .here::before {
+        background: var(--hover);
+      }
+      .ladder-b .here svg.tb {
+        transform: scale(1.15);
       }
       .ladder-l {
         display: flex;
@@ -2900,6 +2948,13 @@
       .pr.none:hover {
         background: var(--panel);
         border-color: var(--border);
+      }
+      .pr.unclaimed[data-key] {
+        cursor: pointer;
+      }
+      .pr.unclaimed[data-key]:hover {
+        background: var(--hover);
+        border-color: var(--border2);
       }
       .pr.unclaimed {
         padding: 9px 13px;
@@ -4046,6 +4101,9 @@
       html.mobile .mrk.none {
         cursor: default;
       }
+      html.mobile .mrk.none[data-key] {
+        cursor: pointer;
+      }
       html.mobile .mrk:not(.none):active {
         filter: brightness(1.25);
       }
@@ -4751,8 +4809,12 @@
           n = (BOOT.name || "").split(/\s+/)[0];
         return `Good ${h < 12 ? "morning" : h < 18 ? "afternoon" : "evening"}${n ? ", " + n : ""}`;
       };
-      const shortDate = (iso) =>
-        new Date(iso + "T00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      // a date more than a year back is ambiguous without its year
+      const shortDate = (iso) => {
+        const d = new Date(iso + "T00:00"),
+          old = Date.now() - d.getTime() > 365 * 864e5;
+        return d.toLocaleDateString("en-US", old ? { month: "short", day: "numeric", year: "numeric" } : { month: "short", day: "numeric" });
+      };
       const store = {
         get(k, d) {
           try {
@@ -5481,6 +5543,7 @@
       // Platinum's wings plus two more feathers a side, each shorter and flatter than the one above
       const WINGED_CREST_3 =
         "M24 3 36 7 46.5 1.5 41 10 40.4 11.6 46.8 14.2 40 17.6 45.8 22 38.8 25.6 38 29.4 C36 36.5 30.5 41 24 44 C18 41 12 36.5 10 29.4 L9.2 25.6 2.2 22 8 17.6 1.2 14.2 7.6 11.6 7 10 1.5 1.5 12 7z";
+      const KITE = "M24 3 40 14.5 43.5 21 24 44 4.5 21 8 14.5z";
       const GEM = "M14.5 8h19l8 11-17.5 25L6.5 19z";
       // the girdle line now breaks in the middle, same as the pavilion facets below it already did, so the whole
       // vertical channel behind the numeral is clear metal rather than just the lower half of it
@@ -5509,12 +5572,13 @@
           y: 26.5,
           art: '<path d="M24 9.5 34.5 13v9.5c0 6-4.3 10.4-10.5 13-6.2-2.6-10.5-7-10.5-13V13z" opacity=".45"/><path d="M18 15.5h12" opacity=".7"/>',
         },
+        // pointed crown instead of the Diamond's flat table, so Ruby is a different outline from the stone above it
         Ruby: {
-          d: GEM,
+          d: KITE,
           y: 28,
           fs: 10,
           to: 1.6,
-          art: GEM_FACETS,
+          art: '<path d="M8 14.5h32M24 3l-7 11.5M24 3l7 11.5M4.5 21h10M33.5 21h10" opacity=".5"/><path d="M14.5 21l5 9M33.5 21l-5 9" opacity=".4"/>',
         },
         Diamond: { d: GEM, y: 28, fs: 10, to: 1.6, art: GEM_FACETS },
         Elite: {
@@ -5558,19 +5622,34 @@
 
       const tierChip = (t) =>
         `<span class="tierchip" style="--c:${t.colour}">${tierBadge(t, 18)}${esc(t.tier)}${t.div ? " " + t.div : ""}</span>`;
-      // progress through the current tier, with what the next one costs
-      const ladder = (
-        t,
-        extra = "",
-      ) => `<div class="ladder"><i style="--c:${t.colour};width:${Math.max(2, t.pct)}%"></i></div>
-  <div class="ladder-l"><span>${esc(t.tier)}${t.div ? " " + t.div : ""} · ${t.score}</span><span>${t.next ? `${extra || ""}${esc(t.next)} at ${t.next_at}` : "top of the ladder"}</span></div>`;
-
-      // the three divisions of the current tier along the bar, and the next tier's badge as the promotion at the far end
+      // progress through the current tier, with what the next one costs. With badges, the tier's three divisions sit on
+      // the bar where they start (III, II, I) and the next tier's badge sits at the far end as the promotion
+      // the ring around the current division, with a gap cut out wherever it would come near the badge's own outline
+      let RING_N = 0;
+      const ringFor = (t, size) => {
+        const id = `rg${++RING_N}`,
+          art = TIER_ART[t.tier] || TIER_ART.Iron,
+          px = (size * 68) / 48;
+        return `<svg class="ring" width="${px}" height="${px}" viewBox="-10 -10 68 68" aria-hidden="true">
+    <mask id="${id}" maskUnits="userSpaceOnUse" x="-10" y="-10" width="68" height="68"><rect x="-10" y="-10" width="68" height="68" fill="#fff"/>
+    <path d="${art.d}" fill="#000" stroke="#000" stroke-width="15" stroke-linejoin="round"/></mask>
+    <circle cx="24" cy="24" r="29.5" fill="none" stroke="${t.colour}" stroke-width="5" mask="url(#${id})"/></svg>`;
+      };
       const DIVS = ["III", "II", "I"];
-      const ladderBadges = (t) =>
-        t.div && t.next
-          ? `<div class="ladder-b">${DIVS.map((d) => `<span class="${d === t.div ? "here" : DIVS.indexOf(d) < DIVS.indexOf(t.div) ? "done" : "todo"}" style="--c:${t.colour}">${tierBadge({ tier: t.tier, div: d, colour: t.colour }, 26)}</span>`).join("")}<span class="todo next" title="${esc(t.next)}">${tierBadge({ tier: t.next, div: "", colour: t.next_colour }, 30)}</span></div>`
-          : "";
+      const ladder = (t, extra = "", badges = 0) => {
+        const bar = `<div class="ladder"><i style="--c:${t.colour};width:${Math.max(2, t.pct)}%"></i></div>`;
+        const pin =
+          badges && t.div && t.next
+            ? `<div class="ladder-b">${DIVS.map(
+                (d, i) =>
+                  `<span class="${d === t.div ? "here" : i < DIVS.indexOf(t.div) ? "done" : "todo"}" style="left:${(i * 100) / 3}%;--c:${t.colour};--rd:${(badges * 64) / 48}px">${tierBadge({ tier: t.tier, div: d, colour: t.colour }, badges)}${d === t.div ? ringFor(t, badges) : ""}</span>`,
+              ).join(
+                "",
+              )}<span class="todo" style="left:100%" title="${esc(t.next)}">${tierBadge({ tier: t.next, div: "", colour: t.next_colour }, badges + 4)}</span></div>`
+            : "";
+        return `${pin ? `<div class="ladder-w">${bar}${pin}</div>` : bar}
+  <div class="ladder-l"><span>${esc(t.tier)}${t.div ? " " + t.div : ""} · ${t.score}</span><span>${t.next ? `${extra || ""}${esc(t.next)} at ${t.next_at}` : "top of the ladder"}</span></div>`;
+      };
 
       let RANKS = null;
       PAGES.ranks = async (c) => {
@@ -5585,14 +5664,14 @@
       o
         ? `<div class="rank-hero ladder-open" onclick="rankLadder()" title="See the whole ladder">${tierBadge(o, MOBILE ? 58 : 72)}
       <div class="who"><div class="tier">${esc(o.tier)}${o.div ? `<em>${o.div}</em>` : ""}</div>
-        <div class="cls">${esc(o.cls)} · overall rank across ${d.by_sport.length} discipline${d.by_sport.length === 1 ? "" : "s"}</div></div>
+        <div class="cls">${o.cls ? esc(o.cls) + " · " : ""}overall rank across ${d.by_sport.length} discipline${d.by_sport.length === 1 ? "" : "s"}</div></div>
       ${MOBILE ? "" : `<div class="sportchips">${d.by_sport.map(sportChip).join("")}</div>`}</div>
       ${ladder(o)}
       ${MOBILE && d.by_sport.length ? `<div class="sportchips mt">${d.by_sport.map(sportChip).join("")}</div>` : ""}
       ${
         rr
           ? `<div class="racerank">${tierBadge(rr, 34)}<div><b>${esc(rr.tier)}${rr.div ? " " + rr.div : ""} on race day</b>
-        <span>Your best multisport result &mdash; ${esc(rr.label)} &middot; ${esc(rr.cls)}</span></div></div>`
+        <span>Your best multisport result &mdash; ${esc(rr.label)}${rr.cls ? " &middot; " + esc(rr.cls) : ""}</span></div></div>`
           : ""
       }`
         : `<div class="empty" style="padding:20px">${I("medal")}<b>No ranks yet</b>Log a workout or a race result and your bests get graded.</div>`
@@ -5627,7 +5706,7 @@
       ${
         d.multi.some((m) => !m.have)
           ? `<div class="small muted" style="margin-top:10px">Greyed-out distances are
-        waiting on a finish time &mdash; add one to a race on the Races page.</div>`
+        waiting on a finish time &mdash; add one to a race on the Races page, or tap one to see the time for every rank.</div>`
           : ""
       }
       <div class="small muted" style="margin-top:10px">${I("info")} Courses differ far more than a track does
@@ -5656,7 +5735,7 @@
       ${
         ev(s).some((e) => !e.have)
           ? `<div class="small muted" style="margin-top:10px">Greyed-out distances need a
-        session or a race at that distance &mdash; a fast block inside a longer one counts too.</div>`
+        session or a race at that distance &mdash; a fast block inside a longer one counts too. Tap one to see the time for every rank.</div>`
           : ""
       }
     </div></div>`,
@@ -5699,12 +5778,12 @@
 
       function prRow(e) {
         if (!e.have)
-          return `<div class="pr none unclaimed" title="${esc(e.hint)}">
-    <div class="hd">${sportIcon(e.sport)}<b>${esc(e.label)}</b></div><div class="rt faint">&mdash;</div></div>`;
+          return `<button class="pr none unclaimed" data-key="${e.sport}:${e.key}" title="${esc(e.hint)}">
+    <div class="hd">${sportIcon(e.sport)}<b>${esc(e.label)}</b></div><div class="rt faint">see the times &rsaquo;</div></button>`;
         return `<button class="pr" data-key="${e.sport}:${e.key}">
     <div class="hd">${sportIcon(e.sport)}<b>${esc(e.label)}</b></div><div>${tierChip(e)}</div>
     <div class="t">${esc(e.time)}</div><div class="rt">${esc(e.pace || "")}</div>
-    ${ladder(e, e.to_next ? `${e.to_next} to ` : "")}
+    ${ladder(e, e.to_next ? `${e.to_next} to ` : "", 20)}
     <div class="sub">${[
       e.gain ? `<span class="pr-gain">${esc(e.gain)} faster than before</span>` : "",
       e.date ? esc(shortDate(e.date)) : "",
@@ -5729,7 +5808,7 @@
       }
 
       function stepsTable(e) {
-        const here = (x, i, all) => x.tier === e.tier && x.div === e.div;
+        const here = (x) => e.have && x.tier === e.tier && x.div === e.div;
         return `<div class="steps">${e.steps
           .map(
             (x) => `<div class="${here(x) ? "here" : ""}" style="--c:${x.colour}">
@@ -5739,14 +5818,27 @@
     <div class="small muted">The time that just reaches each rank, for your age and sex. Iron is anything slower than Bronze III.</div>`;
       }
 
+      function prTargets(e) {
+        modal(
+          `<div class="modal-h"><h3>${badge(e.sport)}${esc(e.label)}</h3><button class="icon-btn" data-close>${I("x")}</button></div>
+    <div class="modal-b">
+      <div class="small muted" style="margin-bottom:10px">${esc(e.hint)}</div>
+      ${stepsTable(e)}
+    </div>
+    <div class="modal-f"><span class="grow"></span><button class="btn" data-close>Close</button></div>`,
+          { width: 520 },
+        );
+      }
+
       function prDetail(key) {
         const e = rankRows().find((x) => `${x.sport}:${x.key}` === key);
+        if (!e.have) return prTargets(e);
         modal(
           `<div class="modal-h"><h3>${badge(e.sport)}${esc(e.label)}</h3><button class="icon-btn" data-close>${I("x")}</button></div>
     <div class="modal-b">
       <div class="rank-hero">${tierBadge(e, 64)}<div class="who">
-        <div class="tier">${esc(e.time)}</div><div class="cls">${e.pace ? esc(e.pace) + " · " : ""}${esc(e.tier)}${e.div ? " " + e.div : ""} · ${esc(e.cls)}</div></div></div>
-      ${ladderBadges(e)}${ladder(e, e.to_next ? `${e.to_next} to ` : "")}
+        <div class="tier">${esc(e.time)}</div><div class="cls">${e.pace ? esc(e.pace) + " · " : ""}${esc(e.tier)}${e.div ? " " + e.div : ""}${e.cls ? " · " + esc(e.cls) : ""}</div></div></div>
+      ${ladder(e, e.to_next ? `${e.to_next} to ` : "", 26)}
       <div class="rank-facts">
         ${[
           ["Score", `${e.score} / 100`],
@@ -5917,7 +6009,7 @@
         o
           ? `<div class="rank-hero">${tierBadge(o, 58)}<div class="who">
           <div class="tier">${esc(o.tier)}${o.div ? `<em>${o.div}</em>` : ""}</div>
-          <div class="cls">${esc(o.cls)} &middot; ${o.score} out of 100</div></div></div>
+          <div class="cls">${o.cls ? esc(o.cls) + " &middot; " : ""}${o.score} out of 100</div></div></div>
         ${ladder(o)}`
           : ""
       }
@@ -5929,7 +6021,7 @@
           const band = !t.at ? `under ${above.at}` : above ? `${t.at}–${above.at}` : `${t.at}+`;
           return `<div class="rung ${here ? "here" : ""}" style="--c:${t.colour}">
           ${tierBadge({ tier: t.tier, div: here ? o.div : "", colour: t.colour }, 34)}
-          <div><b>${esc(t.tier)}</b><span>${esc(t.cls)}</span></div>
+          <div><b>${esc(t.tier)}</b><span>${esc(t.cls || "")}</span></div>
           <div style="text-align:right">${here ? '<div class="you">YOU ARE HERE</div>' : ""}
             <div class="band">${band}</div></div>
         </div>`;
@@ -9610,8 +9702,8 @@
       const mcrTier = (t) => `${esc(t.tier)}${t.div ? " " + t.div : ""}`;
       function mcrRow(e) {
         if (!e.have)
-          return `<div class="mrk none" title="${esc(e.hint)}"><div class="bd mrk-empty">${sportIcon(e.sport)}</div>
-    <div class="g"><b>${esc(e.label)}</b><span>Needs a session or race at this distance</span></div><span class="faint">&mdash;</span></div>`;
+          return `<button class="mrk none" data-key="${e.sport}:${e.key}" title="${esc(e.hint)}"><div class="bd mrk-empty">${sportIcon(e.sport)}</div>
+    <div class="g"><b>${esc(e.label)}</b><span>Not done yet &middot; tap for the times</span></div><span class="faint">&rsaquo;</span></button>`;
         return `<button class="mrk" data-key="${e.sport}:${e.key}" style="--c:${e.colour}"><div class="bd">${tierBadge(e, 44)}</div>
     <div class="g"><b>${esc(e.label)}</b><span>${mcrTier(e)} · ${e.score}${e.gain ? ` · <i class="pr-gain">${esc(e.gain)} faster</i>` : ""}</span>
       <div class="ladder"><i style="--c:${e.colour};width:${Math.max(2, e.pct)}%"></i></div></div>
@@ -9640,7 +9732,7 @@
       ? `<button class="mhero mrk-hero" style="--c:${o.colour}" onclick="rankLadder()">
     <div class="hb">${tierBadge(o, 84)}</div>
     <div class="hw"><span class="small muted">Overall rank</span><h2>${esc(o.tier)}${o.div ? `<em>${o.div}</em>` : ""}</h2>
-      <p>${esc(o.cls)} · ${o.score} / 100</p></div>
+      <p>${o.cls ? esc(o.cls) + " · " : ""}${o.score} / 100</p></div>
     <div class="hl">${ladder(o)}</div>
     <div class="hf small muted">${I("medal")}See the whole ladder ${I("right")}</div></button>`
       : `<div class="mhero" style="--c:var(--muted)"><div class="top">${I("medal")}<span class="small muted">No ranks yet</span></div>
