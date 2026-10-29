@@ -6096,6 +6096,15 @@
     )
     .join("")}
 
+  ${["Run", "Bike"]
+    .filter((s) => groups.includes(s) && show(s))
+    .map(
+      (s) => `<div class="card mt"><div class="card-h"><div><h3>Best efforts</h3>
+    <div class="sub">${s === "Bike" ? "Your strongest power for each duration you've ever held it" : "Your fastest pace for each distance you've ever held it"}</div></div></div>
+    <div class="card-b"><div id="beCurve-${s}" class="small muted">Loading&hellip;</div></div></div>`,
+    )
+    .join("")}
+
   ${
     all && d.bricks
       ? `<div class="card mt"><div class="card-h"><div><h3>${badge("Brick")} Bricks</h3>
@@ -6132,7 +6141,39 @@
               render();
             }),
         );
+        loadBestEfforts(groups, show);
       };
+      // feature 46: fetched after the rest of the ranks page so one slow sport never blocks the others
+      async function loadBestEfforts(groups, show) {
+        for (const s of ["Run", "Bike"]) {
+          const el = $(`#beCurve-${s}`);
+          if (!el || !groups.includes(s) || !show(s)) continue;
+          renderBestEfforts(el, await call("best_efforts", s));
+        }
+      }
+      function renderBestEfforts(el, be) {
+        if (!el.isConnected) return; // the page moved on while this sport's curve was still loading
+        if (!be || !be.points.some((p) => p.value != null)) {
+          el.innerHTML = `<div class="small muted">${
+            be && be.metric === "power"
+              ? "Log a ride with power data to begin building this curve."
+              : "Log a run with GPS splits to begin building this curve."
+          }</div>`;
+          return;
+        }
+        const isPower = be.metric === "power";
+        lineChart(el, {
+          labels: be.points.map((p) => p.label),
+          series: [
+            { name: "All-time best", color: "var(--brand)", data: be.points.map((p) => p.value), area: true },
+            { name: "This session", color: "var(--ok)", data: be.points.map((p) => p.mine), dash: true, thin: true },
+          ],
+          height: 180,
+          xfmt: (v) => v,
+          yfmt: (v) => (isPower ? v.toFixed(0) : fmtPace(v)),
+          tipfmt: (v) => (isPower ? `${v.toFixed(0)} W` : `${fmtPace(v)}${be.pace_unit}`),
+        });
+      }
       const rankRows = () => [...RANKS.events, ...RANKS.multi, ...RANKS.off_bike];
       const sportChip = (s) =>
         `<div class="sportchip">${tierBadge(s, 30)}<div><b>${esc(s.sport)}</b><span>${esc(s.tier)}${s.div ? " " + s.div : ""} · ${s.score}</span></div></div>`;
@@ -7449,6 +7490,7 @@
       <div class="small muted" style="margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.06em">${esc(d.pace_label)}</div>
       <div id="profPace" style="margin-bottom:18px"></div>
       ${d.elev ? `<div class="small muted" style="margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.06em">Elevation</div><div id="profElev"></div>` : ""}
+      ${decoupleBlock(d.decoupling)}
     </div>
     <div class="modal-f"><button class="btn" data-close>Close</button></div>`);
         lineChart($("#profPace"), {
@@ -7469,6 +7511,23 @@
             yfmt: (v) => v.toFixed(0),
             tipfmt: (v) => `${v.toFixed(0)} ${d.elev_unit}`,
           });
+      }
+
+      // feature 43: pace/power-to-HR drift, first half vs second half - only meaningful for a steady aerobic
+      // effort, so a refusal is shown with its reason rather than a number that would just be noise
+      function decoupleBlock(dec) {
+        if (!dec) return "";
+        if (!dec.ok)
+          return `<div class="small muted" style="margin-top:14px">${I("info")} Aerobic decoupling not shown — ${esc(dec.reason)}.</div>`;
+        return `<div class="small muted" style="margin:14px 0 6px;font-weight:600;text-transform:uppercase;letter-spacing:.06em">Aerobic decoupling</div>
+      <div class="row" style="gap:10px;align-items:center;flex-wrap:wrap">
+        <span class="pill ${dec.well_adapted ? "ok" : "warn"}">${dec.pct > 0 ? "+" : ""}${dec.pct}%</span>
+        <span class="small muted">${
+          dec.well_adapted
+            ? "Well-adapted for this duration — output held up against heart rate"
+            : "Notable drift — heart rate rose faster than output held up"
+        }</span>
+      </div>`;
       }
 
       // ------------------------------------------------------------------ interval timer
@@ -10468,6 +10527,15 @@
     )
     .join("")}
 
+  ${["Run", "Bike"]
+    .filter((s) => groups.includes(s) && show(s))
+    .map(
+      (s) => `<div class="msec"><h3>Best efforts</h3><div class="mcard"><div class="p">
+    <p class="small muted" style="margin:0 0 8px">${s === "Bike" ? "Your strongest power for each duration you've ever held it" : "Your fastest pace for each distance you've ever held it"}</p>
+    <div id="beCurve-${s}" class="small muted">Loading&hellip;</div></div></div></div>`,
+    )
+    .join("")}
+
   ${
     RANK_SPORT === "All" && d.bricks
       ? `<div class="msec"><h3>Bricks</h3><div class="mcard"><div class="p">
@@ -10502,6 +10570,7 @@
               render();
             }),
         );
+        loadBestEfforts(groups, show);
       };
 
       // ---- phone: nutrition and life (spliced after MPAGES.races; both fall back to nothing - they replace PAGES.* on the phone)

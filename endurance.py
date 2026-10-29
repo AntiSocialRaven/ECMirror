@@ -1685,9 +1685,97 @@ def downsample_track(points, target=TRACK_POINTS):
 
 def workout_track(w):
     """Parsed GPS samples for a workout row, or None. The single seam later features (power/HR decoupling,
-    a best-efforts curve) should read a workout's track through, rather than touching workouts.track directly."""
+    a best-efforts curve) should read a workout's track through, rather than touching workouts.track directly.
+
+    Each point is {t_s, dist_m, ele_m?} - a per-second GPS fix thinned down. Nothing today attaches a heart
+    rate or power reading to an individual point, only a whole-session average (workouts.avg_hr/avg_w): no
+    import path or live-tracking screen streams either one at that resolution, so a point's optional "hr"
+    and "w" keys are read by decoupling below but are never populated yet. They are honoured, not invented,
+    against the day a producer (a watch delivering per-lap HR, say) starts attaching them.
+    """
     raw = w["track"] if w is not None else None
     return json.loads(raw) if raw else None
+
+
+DECOUPLE_MIN_S = 1200  # under ~20 min a session rarely splits into two halves stable enough to say anything
+DECOUPLE_CV_MAX = 0.18  # GPS noise alone rarely pushes segment-to-segment speed/power past this; intervals do
+
+
+def workout_decoupling(w):
+    """Aerobic decoupling (feature 43): how much output-per-heartbeat fell from the first half of a steady
+    session to the second, as a percentage. Needs a heart-rate (and, for Bike, a power) reading alongside
+    every track point - see the note on workout_track - so most sessions logged today simply don't have the
+    resolution for this yet, and this says so rather than guessing from the single whole-session average.
+
+    Even with that data present, the number is only meaningful for a steady aerobic effort: an interval
+    session's second half is "harder" by design, not by cardiac drift, so a block whose pace or power swings
+    too much between samples is refused rather than scored.
+    """
+    sport = w["sport"] if w is not None else None
+    if sport not in ("Run", "Bike", "Walk", "Hike"):
+        return dict(ok=False, reason="Only scored for steady runs, walks, hikes and rides")
+    track = workout_track(w)
+    if not track or len(track) < 8:
+        return dict(ok=False, reason="No GPS track recorded for this session")
+    dur = (track[-1].get("t_s") or 0) - (track[0].get("t_s") or 0)
+    if dur < DECOUPLE_MIN_S:
+        return dict(ok=False, reason="Too short for a reliable first-half/second-half split")
+    want_power = sport == "Bike"
+    have_hr = sum(1 for p in track if p.get("hr") is not None)
+    if have_hr < len(track) * 0.9:
+        return dict(ok=False, reason="No heart-rate reading stored with this track")
+    if want_power and sum(1 for p in track if p.get("w") is not None) < len(track) * 0.9:
+        return dict(ok=False, reason="No power reading stored with this track")
+    mid_t = track[0]["t_s"] + dur / 2
+    segs = []  # (dt, dd, hr_avg, out_avg, t_mid) per consecutive pair; out = speed (m/s) or watts
+    for a, b in zip(track, track[1:]):
+        dt_ = (b.get("t_s") or 0) - (a.get("t_s") or 0)
+        dd = (b.get("dist_m") or 0) - (a.get("dist_m") or 0)
+        hr_a, hr_b = a.get("hr"), b.get("hr")
+        if dt_ <= 0 or dd < 0 or hr_a is None or hr_b is None:
+            continue
+        if want_power:
+            w_a, w_b = a.get("w"), b.get("w")
+            if w_a is None or w_b is None:
+                continue
+            out = (w_a + w_b) / 2
+        else:
+            if dd <= 0:
+                continue
+            out = dd / dt_
+        segs.append((dt_, dd, (hr_a + hr_b) / 2, out, (a["t_s"] + b["t_s"]) / 2))
+    if len(segs) < 6:
+        return dict(ok=False, reason="Not enough continuous data to split in half")
+    outs = [s[3] for s in segs]
+    mean_out = sum(outs) / len(outs)
+    if mean_out <= 0:
+        return dict(ok=False, reason="No measurable output")
+    cv = (sum((o - mean_out) ** 2 for o in outs) / len(outs)) ** 0.5 / mean_out
+    if cv > DECOUPLE_CV_MAX:
+        return dict(ok=False, reason="Pace/power swings too much - this reads as intervals, not a steady effort")
+
+    def half(first):
+        rel = [s for s in segs if (s[4] < mid_t) == first]
+        tdt, tdd = sum(s[0] for s in rel), sum(s[1] for s in rel)
+        if tdt <= 0:
+            return None
+        hr = sum(s[2] * s[0] for s in rel) / tdt
+        out = sum(s[3] * s[0] for s in rel) / tdt if want_power else tdd / tdt
+        return hr, out
+
+    h1, h2 = half(True), half(False)
+    if not h1 or not h2 or h1[0] <= 0 or h2[0] <= 0 or h1[1] <= 0:
+        return dict(ok=False, reason="Not enough data in both halves")
+    ratio1, ratio2 = h1[1] / h1[0], h2[1] / h2[0]
+    pct = round((ratio1 - ratio2) / ratio1 * 100, 1)
+    return dict(
+        ok=True,
+        pct=pct,
+        well_adapted=pct < 5,
+        metric="power" if want_power else "pace",
+        h1=dict(hr=round(h1[0]), out=round(h1[1], 2)),
+        h2=dict(hr=round(h2[0]), out=round(h2[1], 2)),
+    )
 
 
 def _best_window(splits, km):
@@ -1710,6 +1798,68 @@ def _best_window(splits, km):
                     best = cand if best is None or cand < best else best
                 break
     return best
+
+
+# Best-efforts curve (feature 46): the fastest pace or strongest power the athlete has ever held for roughly a
+# given span. Running keeps real splits, so it reuses the exact distances the Records page already grades
+# (RECORD_EVENTS) through _best_window, rather than a second, arbitrary scale - the app never shows two
+# different "fastest 5K"s. Cycling gets no power stream from anything that feeds this app, only one average
+# per ride, so its ladder is time instead: a ride's own average stands in for any shorter stretch of itself,
+# because some sub-window of any ride must average at least the ride's own average (the average would be
+# wrong otherwise) - a floor, never an overstatement. It starts at 5 minutes because anything shorter would
+# need real per-second power, which isn't stored.
+BEST_EFFORT_BIKE_S = [
+    (300, "5 min"), (600, "10 min"), (1200, "20 min"), (1800, "30 min"), (3600, "60 min"), (5400, "90 min"),
+    (7200, "2 hr"),
+]
+
+
+def best_efforts_curve(rows, sport, highlight_id=None):
+    """All-time best per ladder point for `sport`, plus - where highlight_id names a qualifying workout - that
+    same session's own value at each point it reaches, so one recent effort can be read against its history."""
+    if sport == "Bike":
+        bests = {s: None for s, _ in BEST_EFFORT_BIKE_S}
+        mine = {s: None for s, _ in BEST_EFFORT_BIKE_S}
+        for w in rows:
+            if SPORT_FAMILY.get(w["sport"], w["sport"]) != "Bike" or not w["avg_w"] or not w["dur_s"]:
+                continue
+            for s, _ in BEST_EFFORT_BIKE_S:
+                if w["dur_s"] < s:
+                    continue
+                if bests[s] is None or w["avg_w"] > bests[s][0]:
+                    bests[s] = (w["avg_w"], w["date"])
+                if highlight_id and w["id"] == highlight_id:
+                    mine[s] = w["avg_w"]
+        return [
+            dict(label=lbl, s=s, km=None, value=bests[s][0] if bests[s] else None,
+                 date=bests[s][1] if bests[s] else None, mine=mine[s])
+            for s, lbl in BEST_EFFORT_BIKE_S
+        ]
+
+    events = [(label, km) for sp, _, label, km in RECORD_EVENTS if sp == sport]
+    bests = {km: None for _, km in events}
+    mine = {km: None for _, km in events}
+    for w in rows:
+        if SPORT_FAMILY.get(w["sport"], w["sport"]) != sport or not w["splits"] or not w["dist_km"]:
+            continue
+        splits = None
+        for _, km in events:
+            if w["dist_km"] < km:
+                continue
+            if splits is None:
+                splits = json.loads(w["splits"])
+            t = _best_window(splits, km)
+            if not t:
+                continue
+            if bests[km] is None or t < bests[km][0]:
+                bests[km] = (t, w["date"])
+            if highlight_id and w["id"] == highlight_id:
+                mine[km] = t
+    return [
+        dict(label=label, s=None, km=km, value=bests[km][0] if bests[km] else None,
+             date=bests[km][1] if bests[km] else None, mine=mine[km])
+        for label, km in events
+    ]
 
 
 def event_window(km, sport=None):
@@ -3763,7 +3913,7 @@ def _parse_fit(path):
     with open(path, "rb") as fh:
         data = fh.read()
     file_type, session, laps, pts = None, {}, [], []
-    hrs, watts = [], []
+    hrs, watts, samples = [], [], []
     for global_num, msg in _fit_messages(data):
         if global_num == 0:  # file_id
             file_type = msg.get(0)
@@ -3779,6 +3929,17 @@ def _parse_fit(path):
             lat, lon, ts = msg.get(0), msg.get(1), msg.get(253)
             if lat is not None and lon is not None and ts is not None:
                 pts.append((lat * 180 / 2**31, lon * 180 / 2**31, ts))
+            # record.distance is hundredths of a metre; altitude is fifths of a metre, offset 500 below zero
+            if ts is not None and msg.get(5) is not None:
+                samples.append(
+                    dict(
+                        t=ts,
+                        dist_m=msg[5] / 100,
+                        **({"ele_m": msg[2] / 5 - 500} if msg.get(2) is not None else {}),
+                        **({"hr": msg[3]} if msg.get(3) is not None else {}),
+                        **({"w": msg[7]} if msg.get(7) is not None else {}),
+                    )
+                )
     if file_type is not None and file_type != 4:
         raise ValueError(f"not an activity FIT file (file_id.type={file_type})")
     totals = session or (_sum_fit_laps(laps) if laps else {})
@@ -3810,14 +3971,16 @@ def _parse_fit(path):
         hrs = [session[16]]
     if not watts and session.get(20) is not None:
         watts = [session[20]]
-    return sport, start, dur, dist, hrs, watts
+    t0 = samples[0]["t"] if samples else 0
+    track = downsample_track([dict(p, t_s=p.pop("t") - t0) for p in samples])
+    return sport, start, dur, dist, hrs, watts, track
 
 
 def parse_activity(path):
     """FIT, TCX or GPX -> dict(date, sport, dur_s, dist_km, avg_hr, avg_w)."""
     hrs, watts = [], []
     if path.lower().endswith(".fit"):
-        sport, start, dur, dist, hrs, watts = _parse_fit(path)
+        sport, start, dur, dist, hrs, watts, track = _parse_fit(path)
         local = _local(dt.datetime.fromisoformat(start.strip())) if start else None
         return dict(
             date=(local.date() if local else dt.date.today()).isoformat(),
@@ -3827,6 +3990,7 @@ def parse_activity(path):
             dist_km=dist,
             avg_hr=sum(hrs) / len(hrs) if hrs else None,
             avg_w=sum(watts) / len(watts) if watts else None,
+            track=track or None,
             notes="Imported: " + os.path.basename(path),
         )
     root = ET.parse(path).getroot()
@@ -5022,6 +5186,55 @@ class Api:
             pace_label="Speed" if sport == "Bike" else "Pace",
             pace_unit=unit("dist") + "/h" if sport == "Bike" else "/" + unit("dist"),
             elev_unit=unit("elev"),
+            decoupling=workout_decoupling(w),
+        )
+
+    @_locked
+    def best_efforts(self, sport):
+        """Feature 46: the all-time best-efforts curve for `sport`, with the most recent qualifying session
+        overlaid so the athlete can see how it stacks up without hunting for a specific workout first."""
+        rows = self._workouts()
+        highlight = next(
+            (
+                w["id"]
+                for w in rows
+                if SPORT_FAMILY.get(w["sport"], w["sport"]) == sport
+                and ((sport == "Bike" and w["avg_w"] and w["dur_s"]) or (sport != "Bike" and w["splits"]))
+            ),
+            None,
+        )
+        pts = best_efforts_curve(rows, sport, highlight)
+        if sport == "Bike":
+            return dict(
+                sport=sport,
+                metric="power",
+                unit="W",
+                points=[
+                    dict(
+                        label=p["label"],
+                        value=round(p["value"]) if p["value"] else None,
+                        mine=round(p["mine"]) if p["mine"] else None,
+                        date=p["date"],
+                    )
+                    for p in pts
+                ],
+            )
+        km_scale = KM_MI if imp() else 1
+        return dict(
+            sport=sport,
+            metric="pace",
+            pace_unit="/" + unit("dist"),
+            points=[
+                dict(
+                    label=p["label"],
+                    value=round(p["value"] / p["km"] * km_scale, 1) if p["value"] else None,
+                    time=hms(p["value"]) if p["value"] else None,
+                    mine=round(p["mine"] / p["km"] * km_scale, 1) if p["mine"] else None,
+                    mine_time=hms(p["mine"]) if p["mine"] else None,
+                    date=p["date"],
+                )
+                for p in pts
+            ],
         )
 
     @_locked
@@ -5104,8 +5317,8 @@ class Api:
             kcal = estimate_kcal(P, a["sport"], a["dur_s"], a["dist_km"], a["avg_w"], tss)
             splits = self._take_watch_splits(a.get("start")) if a.get("start") else None
             self._db.execute(
-                "INSERT INTO workouts(date,start,sport,dur_s,dist_km,rpe,avg_hr,avg_w,tss,kcal,notes,indoor,splits) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO workouts(date,start,sport,dur_s,dist_km,rpe,avg_hr,avg_w,tss,kcal,notes,indoor,splits"
+                ",track) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     a["date"],
                     a.get("start"),
@@ -5120,6 +5333,7 @@ class Api:
                     a.get("notes") or "Imported",
                     1 if a.get("indoor") else 0,
                     splits,
+                    json.dumps(a["track"]) if a.get("track") else None,
                 ),
             )
             added += 1
