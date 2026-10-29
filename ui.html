@@ -9057,6 +9057,7 @@
     <div class="card mobile-only" id="appSrcCard"></div>
     <div class="card" id="syncCard" style="grid-column:1/-1"></div>
     <div class="card mobile-only" id="healthCard"></div>
+    <div class="card desktop-only" id="watchFolderCard"></div>
     <div class="card" id="gearCard" style="grid-column:1/-1"></div>
     <div class="card mobile-only" id="errLogCard"></div>
     </div>
@@ -9074,7 +9075,9 @@
         $("#openDir").onclick = () => call("open_data_folder");
         drawSkin();
         drawGear();
-        MOBILE ? (drawPhoneSync(), drawAppSource(), drawHealth(), drawErrorLog()) : (drawHub(), drawUpdates());
+        MOBILE
+          ? (drawPhoneSync(), drawAppSource(), drawHealth(), drawErrorLog())
+          : (drawHub(), drawUpdates(), drawWatchFolder());
         $("#expAll").onclick = async () => {
           const r = await call("export_all");
           if (!r.cancelled) toast("Data exported", r.path);
@@ -9576,6 +9579,45 @@
             await call("health_enable", false);
             toast("Apple Health import off", "Already imported data stays.", "info");
             drawHealth();
+          };
+      }
+
+      // ------------------------------------------------------------------ watch folder (desktop): Garmin
+      // Express/Wahoo drop .fit/.tcx/.gpx into a folder on the PC; scanned on launch and by this card's button.
+      const watchFolderMsg = (r) =>
+        `${r.ok} workout${r.ok === 1 ? "" : "s"} imported${r.skipped ? `, ${r.skipped} already logged` : ""}` +
+        (r.bad.length ? `\n\nProblems:\n${r.bad.join("\n")}` : "");
+      window.onWatchFolderScan = (r) => {
+        if (r.disabled || (!r.ok && !r.skipped && !r.bad.length)) return;
+        toast(`Watch folder: ${r.ok} imported`, watchFolderMsg(r), r.bad.length ? "warn" : "ok");
+        refreshAll();
+      };
+      async function drawWatchFolder() {
+        const st = await call("watchfolder_state"),
+          el = $("#watchFolderCard");
+        if (!el) return;
+        el.innerHTML = `<div class="card-h"><div><h3>${I("folder")} Watch folder</h3><div class="sub">Garmin Express, the Wahoo app and most watch software drop .fit/.tcx/.gpx files into a folder on this computer. Point at it once and new activities import on their own. Desktop-only: the phone can't watch a folder on this computer.</div></div></div>
+    <div class="card-b">${
+      st.on && st.path
+        ? `<div class="row wrap"><div class="grow small muted"><code>${esc(st.path)}</code><br>${st.last ? "Last scanned " + new Date(st.last).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "Not scanned yet"}. .fit files can't be read directly — export as TCX from Garmin Connect/Strava.</div>
+        <button type="button" class="btn primary" id="wfScan">${I("refresh")}Scan now</button><button type="button" class="btn" id="wfChange">Change folder…</button><button type="button" class="btn" id="wfOff">Turn off</button></div>`
+        : `<p class="muted" style="margin:0 0 12px">New files are picked up automatically each time you open the app; duplicates of activities you've already logged are skipped.</p>
+        <button type="button" class="btn primary" id="wfOn">${I("folder")}Choose folder…</button>`
+    }</div>`;
+        const choose = async () => {
+          const r = await call("watchfolder_choose");
+          if (r.cancelled) return;
+          window.onWatchFolderScan(r);
+          drawWatchFolder();
+        };
+        if ($("#wfOn")) $("#wfOn").onclick = choose;
+        if ($("#wfChange")) $("#wfChange").onclick = choose;
+        if ($("#wfScan")) $("#wfScan").onclick = async () => window.onWatchFolderScan(await call("watchfolder_scan"));
+        if ($("#wfOff"))
+          $("#wfOff").onclick = async () => {
+            await call("watchfolder_enable", false);
+            toast("Watch folder off", "Already imported activities stay.", "info");
+            drawWatchFolder();
           };
       }
 
@@ -11307,7 +11349,14 @@
       async function init() {
         API = window.pywebview.api;
         BOOT = await call("boot");
-        if (!MOBILE) setTimeout(() => checkUpdates().catch(() => {}), 4000);
+        if (!MOBILE) {
+          setTimeout(() => checkUpdates().catch(() => {}), 4000);
+          // watch-folder files only show up once Garmin Express/Wahoo has synced the watch, which happens
+          // before the athlete opens this app - so a scan at launch catches them without a polling thread.
+          call("watchfolder_scan")
+            .then((r) => window.onWatchFolderScan(r))
+            .catch(() => {});
+        }
         if (MOBILE) wireKeyboard();
         buildNav();
         shell();

@@ -206,6 +206,9 @@ LOCAL_KEYS = {
     "hub_last",
     "health_on",
     "health_last",
+    "watchfolder_path",
+    "watchfolder_on",
+    "watchfolder_last",
     "device_id",
     "device_name",
     "serve_assets",
@@ -366,6 +369,9 @@ DEFAULTS = dict(
     device_name="",
     health_on=False,
     health_last="",
+    watchfolder_path="",
+    watchfolder_on=False,
+    watchfolder_last="",
     team_on=False,
     team_days=[0, 1, 2, 3, 4],
     team_min=90.0,
@@ -4844,6 +4850,55 @@ class Api:
             self._db.execute("INSERT OR REPLACE INTO kv VALUES(?, ?)", (f"wsplits:{start}", json.dumps(splits)))
             self._db.commit()
         return dict(ok=True)
+
+    # ---- watch folder (desktop): Garmin Express/Wahoo drop .fit/.tcx/.gpx into a folder on the PC
+    @_locked
+    def watchfolder_state(self):
+        return dict(on=P["watchfolder_on"], path=P["watchfolder_path"], last=P["watchfolder_last"])
+
+    def watchfolder_choose(self):
+        import webview
+
+        paths = self._window.create_file_dialog(webview.FileDialog.FOLDER)
+        if not paths:
+            return dict(cancelled=True)
+        with self._lock:
+            P["watchfolder_path"] = paths[0] if isinstance(paths, (list, tuple)) else paths
+            P["watchfolder_on"] = True
+            self._save()
+            return dict(self.watchfolder_scan(), cancelled=False)
+
+    @_locked
+    def watchfolder_enable(self, on):
+        P["watchfolder_on"] = bool(on)
+        self._save()
+        return dict(ok=True)
+
+    @_locked
+    def watchfolder_scan(self):
+        """Pick up new .gpx/.tcx/.csv files a watch-sync tool dropped in the watched folder. There's no separate
+        "already seen" ledger: every file in the folder is re-parsed on each scan and handed to the same
+        is_duplicate check manual import uses, so a file imported last time is silently skipped, not re-added.
+        That trades a little repeated parsing for one duplicate mechanism instead of two.
+        .fit isn't a format parse_activity reads (see its docstring: export TCX from Garmin Connect/Strava
+        instead), so .fit files are counted and reported rather than silently ignored."""
+        path = P["watchfolder_path"]
+        if not P["watchfolder_on"] or not path:
+            return dict(ok=0, skipped=0, dups=[], bad=[], disabled=True)
+        try:
+            names = os.listdir(path)
+        except OSError as e:
+            return dict(ok=0, skipped=0, dups=[], bad=[f"Watch folder unavailable: {e.strerror or e}"], disabled=False)
+        paths = [os.path.join(path, n) for n in names if n.lower().endswith((".gpx", ".tcx", ".csv"))]
+        n_fit = sum(1 for n in names if n.lower().endswith(".fit"))
+        result = self._import_paths(paths)
+        if n_fit:
+            result["bad"] = result["bad"] + [
+                f"{n_fit} .fit file(s) skipped — export as TCX from Garmin Connect/Strava"
+            ]
+        P["watchfolder_last"] = dt.datetime.now().isoformat(timespec="seconds")
+        self._save()
+        return dict(result, disabled=False)
 
     def _save_dialog(self, name, types):
         import webview
