@@ -5069,6 +5069,8 @@
           '<path d="M12 14l4-4"/><circle cx="12" cy="14" r="1.6"/><path d="M4.2 17a9 9 0 1 1 15.6 0"/><path d="M4.2 17h15.6"/>',
         medal:
           '<circle cx="12" cy="15" r="6"/><path d="M12 12.5 13 15h2.2l-1.8 1.4.7 2.3-2.1-1.4-2.1 1.4.7-2.3L8.8 15H11z"/><path d="M8 3h8l-2.5 5.2M8 3l2.8 5.4"/>',
+        gear:
+          '<path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1.08 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
         // sport icons below are from Tabler Icons (MIT, https://tabler.io/icons)
         bike: '<path d="M2 18a3 3 0 1 0 6 0a3 3 0 0 0 -6 0"/><path d="M16 18a3 3 0 1 0 6 0a3 3 0 0 0 -6 0"/><path d="M12 19v-4l-3 -3l5 -4l2 3h3"/><path d="M13.007 5a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/>',
         run: '<path d="M11.007 5a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M4 17l5 1l.75 -1.5"/><path d="M15 21v-4l-4 -3l1 -6"/><path d="M7 12v-3l5 -1l3 3l3 1"/>',
@@ -6227,7 +6229,7 @@
       <div id="prFacts">
         <div class="rank-facts">
         ${[
-          ["Score", `${e.score} / 100`],
+          [e.age_graded ? "Age-graded score" : "Score", `${e.score} / 100`],
           [
             "Set",
             e.date
@@ -6242,6 +6244,10 @@
           ["Qualifying efforts", `${e.count}`],
           ...(e.prev ? [["Previous best", `${e.prev} (${e.gain} slower)`]] : []),
           ...(e.next_time ? [[`${e.next} needs`, `${e.next_time}${e.to_next ? ` · ${e.to_next} to find` : ""}`]] : []),
+          ...(e.trend ? [[`Reaching ${e.next}`, e.trend]] : []),
+          ...(e.age_graded
+            ? [["Open standard", `${e.open.tier}${e.open.div ? " " + e.open.div : ""} · ${e.open.score}/100 (no age adjustment)`]]
+            : []),
         ]
           .map(([k, v]) => `<div><span>${esc(k)}</span><b>${esc(v)}</b></div>`)
           .join("")}
@@ -6777,6 +6783,7 @@
       MPAGES.log = async (c) => {
         const d = await call("workouts");
         LOG.all = d.rows;
+        LOG.gear = d.gear;
         const st = d.stats;
         if (LOG.filter !== "All" && !d.sports.includes(LOG.filter)) LOG.filter = "All";
         c.innerHTML = `<div class="page">
@@ -7214,6 +7221,7 @@
       PAGES.log = async (c) => {
         const d = await call("workouts");
         LOG.all = d.rows;
+        LOG.gear = d.gear;
         const st = d.stats;
         if (LOG.filter !== "All" && !d.sports.includes(LOG.filter)) LOG.filter = "All";
         c.innerHTML = `<div class="page">
@@ -7364,6 +7372,7 @@
       <div class="field"><span>Effort (RPE)<b id="rpeV" style="font-weight:600;color:var(--brand)"></b></span><input type="range" name="rpe" min="0" max="10" value="${e.rpe || 0}"></div>
       <div class="field f-in"><span>Where</span><label class="switch"><input type="checkbox" name="indoor" ${(e.indoor ?? (!id && store.get("indoor:" + sport, false))) ? "checked" : ""}><b></b><span class="small muted">Indoors</span></label>
         <span class="help">Treadmill, trainer, gym. Indoor sessions don't get weather.</span></div>
+      <label class="field f-gear" style="${(LOG.gear || []).length ? "" : "display:none"}"><span>Gear</span><select name="gear_id" id="gearSel"></select></label>
       <label class="field full"><span>Notes</span><textarea name="notes" rows="2" placeholder="How did it feel? Conditions, fueling, gear…">${esc(e.notes || "")}</textarea></label>
     </div>
     <div class="estimate" id="est"></div>
@@ -7376,13 +7385,24 @@
             if (id) o.id = id;
             return o;
           };
-        let t;
+        let t,
+          gearSport = null;
+        const syncGear = (s) => {
+          if (s === gearSport) return;
+          gearSport = s;
+          const opts = (LOG.gear || []).filter((g) => g.sports.includes(s));
+          const keep = e.gear_id && opts.some((g) => String(g.id) === String(e.gear_id)) ? e.gear_id : "";
+          $("#gearSel").innerHTML =
+            `<option value="">Auto</option>${opts.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("")}<option value="none">None</option>`;
+          $("#gearSel").value = keep;
+        };
         const sync = () => {
           const s = f.sport.value;
           $("#distU").textContent = s === "Swim" ? BOOT.swim_unit : BOOT.dist_unit;
           $(".f-w", m).style.display = ["Bike", "Brick", "Row", "Other"].includes(s) ? "" : "none";
           $(".f-dist", m).style.display = ["Strength", "Mobility"].includes(s) ? "none" : "";
           $(".f-in", m).style.display = ["Swim", "Strength", "Mobility"].includes(s) ? "none" : "";
+          syncGear(s);
           $("#rpeV").textContent = RPE[+f.rpe.value] + (+f.rpe.value ? ` · ${f.rpe.value}/10` : "");
           clearTimeout(t);
           t = setTimeout(async () => {
@@ -8502,6 +8522,16 @@
         <div id="swOut" class="small" style="margin-top:10px"></div></div></div>
   </div>
   ${d.sessions.length ? `<div class="grid g3 mt">${d.sessions.map((s) => `<div class="card"><div class="card-h"><div class="row">${badge(s.sport)}<span class="muted small">${s.dur}</span></div></div><div class="card-b">${fuelList(s.lines) || '<span class="muted small">No special fueling needed.</span>'}</div></div>`).join("")}</div>` : ""}
+  <div class="card mt"><div class="card-h"><div><h3>Caffeine</h3><div class="sub">Training input, not medical advice · habitual intake and sensitivity set in Settings</div></div>
+    <div class="row wrap"><span class="pill">${d.caffeine.habitual_mg} mg/day habitual</span><span class="pill">${esc(d.caffeine.sensitivity)} sensitivity</span></div></div>
+    <div class="card-b">${
+      d.caffeine.session
+        ? `<div class="row wrap" style="gap:28px;align-items:flex-start">
+      <div class="card kpi flat" style="min-width:160px"><div class="l">${I("bolt")}For today's ${esc(d.caffeine.session.sport.toLowerCase())}</div><div class="v">${d.caffeine.session.mg}<small>mg</small></div><div class="s">${d.caffeine.session.mg_per_kg} mg/kg${d.caffeine.session.capped ? " · capped" : ""}</div></div>
+      <div class="grow"><div class="principles">${d.caffeine.session.splits.map((s) => `<div><b>${esc(s.when)}</b><span>${s.mg} mg</span></div>`).join("")}</div>
+      <div class="small muted" style="margin-top:10px">${esc(d.caffeine.session.basis)}</div></div></div>`
+        : `<div class="small muted">No session today long enough (45 min+) to need a caffeine strategy.</div>`
+    }</div></div>
   <div class="card mt"><div class="card-h"><div><h3>Principles</h3><div class="sub">General guidance for healthy adults. Not medical advice.</div></div></div>
     <div class="card-b"><div class="principles">${d.principles.map(([t, b]) => `<div><b>${esc(t)}</b><span>${esc(b)}</span></div>`).join("")}</div></div></div>
   </div>`;
@@ -9027,6 +9057,8 @@
     <div class="card mobile-only" id="appSrcCard"></div>
     <div class="card" id="syncCard" style="grid-column:1/-1"></div>
     <div class="card mobile-only" id="healthCard"></div>
+    <div class="card" id="gearCard" style="grid-column:1/-1"></div>
+    <div class="card mobile-only" id="errLogCard"></div>
     </div>
     <div class="savebar"><span class="small muted">${I("info")} Changes apply to plans, predictions, zones and nutrition as soon as you save.</span><span class="grow"></span>
       <span class="pill warn" id="dirty" style="display:none">Unsaved changes</span><button type="button" class="btn" id="pfReset">Discard</button><button type="submit" class="btn primary">${I("check")}Save settings</button></div></form></div>`;
@@ -9041,7 +9073,8 @@
         $("#pfReset").onclick = () => render(true);
         $("#openDir").onclick = () => call("open_data_folder");
         drawSkin();
-        MOBILE ? (drawPhoneSync(), drawAppSource(), drawHealth()) : (drawHub(), drawUpdates());
+        drawGear();
+        MOBILE ? (drawPhoneSync(), drawAppSource(), drawHealth(), drawErrorLog()) : (drawHub(), drawUpdates());
         $("#expAll").onclick = async () => {
           const r = await call("export_all");
           if (!r.cancelled) toast("Data exported", r.path);
@@ -9095,7 +9128,7 @@
       <div class="row wrap"><span class="small muted">Severity</span><div class="seg" data-sev="${i.id}">${[1, 2, 3, 4, 5].map((n) => `<button class="${n === i.severity ? "on" : ""}" data-n="${n}" title="${esc(d.severity[n])}: ${esc(d.severity_help[n])}">${n}</button>`).join("")}</div>
         <button class="btn sm" data-edit="${i.id}">${I("edit")}Edit</button><button class="btn sm primary" data-resolve="${i.id}">${I("check")}Mark resolved</button></div></div>
     <div class="card-b grid g2" style="gap:24px">
-      <div><div class="small muted" style="font-weight:600;margin-bottom:4px">How your plan changes</div><p style="margin:0 0 14px">${sevPill(i)} ${esc(i.sev_help)}${i.kind === "Injury" ? " A 15-minute rehab session is added every day." : ""} Once resolved, training ramps back over two weeks.</p>
+      <div><div class="small muted" style="font-weight:600;margin-bottom:4px">How your plan changes</div><p style="margin:0 0 14px">${sevPill(i)} ${esc(i.sev_help)}${i.kind === "Injury" ? " A 15-minute rehab session is added every day." : ""} Once resolved, you'll set a graded ramp instead of jumping straight back to the full plan.</p>
         <div class="small muted" style="font-weight:600;margin-bottom:2px">Guidance</div><ul class="clean">${i.guidance.map((g) => `<li>${esc(g)}</li>`).join("")}</ul></div>
       <div>${i.rehab ? `<div class="small muted" style="font-weight:600;margin-bottom:4px">Rehab</div><p style="margin:0 0 14px">${esc(i.rehab)}</p>` : ""}
         ${i.red_flags ? `<div class="flags"><b>${I("info")} Get it checked</b><span>${esc(i.red_flags)}</span></div>` : ""}
@@ -9134,14 +9167,7 @@
         const all = [...d.active, ...d.past],
           byId = (id) => all.find((x) => x.id === +id);
         $$("[data-edit]").forEach((b) => (b.onclick = () => openIssue(byId(b.dataset.edit))));
-        $$("[data-resolve]").forEach(
-          (b) =>
-            (b.onclick = async () => {
-              await call("resolve_issue", +b.dataset.resolve);
-              toast("Marked resolved", "Training ramps back over the next two weeks.");
-              refreshAll();
-            }),
-        );
+        $$("[data-resolve]").forEach((b) => (b.onclick = () => openResolve(byId(b.dataset.resolve))));
         $$("[data-sev]").forEach((g) =>
           $$("button", g).forEach(
             (b) =>
@@ -9156,6 +9182,27 @@
         );
       };
       const badge2 = (k) => `<span class="badge" style="--c:${KIND_C[k]}"><i></i>${k}</span>`;
+      async function openResolve(i) {
+        const s = await call("suggest_ramp", i.id);
+        const days = s.ok ? s.days : 14;
+        const m = modal(
+          `<div class="modal-h"><div><h3>Mark resolved</h3><div class="small muted">A graded return instead of going straight back to the full plan.</div></div><button class="icon-btn" data-close>${I("x")}</button></div>
+  <div class="modal-b">
+    <p style="margin:0 0 14px">Based on ${esc(i.name).toLowerCase()}'s severity and how long it ran, ${days} days is a sensible ramp: half volume for the first half, three-quarter volume for the second, then back to the full plan.</p>
+    <label class="field"><span>Ramp length (days)</span><input type="number" id="rampDays" min="0" max="42" value="${days}"></label>
+  </div>
+  <div class="modal-f"><span class="grow"></span><button class="btn" data-close>Cancel</button><button class="btn primary" id="resolveGo">${I("check")}Mark resolved</button></div>`,
+          { width: 460 },
+        );
+        $("#resolveGo").onclick = async () => {
+          const n = Math.max(0, Math.min(42, +$("#rampDays").value || 0));
+          await call("resolve_issue", i.id, n);
+          closeModal();
+          toast("Marked resolved", n ? `Training ramps back over ${n} days.` : "Full load resumes right away.");
+          HEALTH = null;
+          refreshAll();
+        };
+      }
       async function openIssue(i = {}) {
         const d = HEALTH || (await call("health"));
         const kind0 = i.kind || "Injury",
@@ -9532,6 +9579,82 @@
           };
       }
 
+      // ------------------------------------------------------------------ gear: shoes, bikes, chains, tyres...
+      // mileage accrues on its own from the log (a default item per sport), so the only hand work here is
+      // telling the app what you own and when to retire it.
+      let GEAR = null;
+      async function drawGear() {
+        const d = (GEAR = await call("gear")),
+          el = $("#gearCard");
+        if (!el) return;
+        const row = (g) => `<div class="row wrap" data-gear-edit="${g.id}" style="padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer;${g.active ? "" : "opacity:.6"}">
+      <div class="grow">
+        <div class="row" style="gap:8px"><b>${esc(g.name)}</b><span class="badge" style="--c:var(--text2)"><i></i>${esc(g.kind)}</span>
+          ${g.is_default ? `<span class="pill ok">Default</span>` : ""}${!g.active ? `<span class="pill">Retired</span>` : ""}
+          ${g.warn ? `<span class="pill ${g.warn}">${g.warn === "bad" ? "Past limit" : "Near limit"}</span>` : ""}</div>
+        <div class="small muted" style="margin-top:4px">${g.sports.map((s) => esc(s)).join(", ")}${g.purchased ? ` · bought ${esc(g.purchased)}` : ""}${g.notes ? ` · ${esc(g.notes)}` : ""}</div>
+        ${g.retire ? `<div class="bar" style="height:6px;margin-top:8px;max-width:260px"><i style="width:${Math.min(100, g.pct)}%;background:${g.warn === "bad" ? "var(--bad)" : g.warn === "warn" ? "var(--warn)" : "var(--brand)"}"></i></div>` : ""}
+      </div>
+      <div class="small" style="text-align:right;white-space:nowrap">
+        <div><b>${g.dist}</b>${g.retire ? ` <span class="muted">/ ${g.retire}${g.pct !== null ? ` · ${g.pct}%` : ""}</span>` : ""}</div>
+        <div class="muted">${g.dur}</div>
+      </div></div>`;
+        el.innerHTML = `<div class="card-h"><div><h3>${I("gear")} Gear</h3><div class="sub">Mileage on shoes, bikes and other kit, tallied automatically from your log.</div></div>
+      <button type="button" class="btn sm" id="gearAdd">${I("plus")}Add gear</button></div>
+    <div class="card-b">${
+      d.items.length
+        ? d.items.map(row).join("")
+        : `<p class="muted" style="margin:0">Add a pair of shoes or a bike and it starts tracking mileage as soon as you log a session.</p>`
+    }</div>`;
+        $("#gearAdd").onclick = () => openGear();
+        $$("[data-gear-edit]", el).forEach(
+          (r) => (r.onclick = () => openGear(d.items.find((g) => g.id === +r.dataset.gearEdit))),
+        );
+      }
+      function openGear(g = {}) {
+        const sports = (BOOT.all_sports || []).filter((s) => !["Strength", "Mobility"].includes(s));
+        const m = modal(
+          `<div class="modal-h"><div><h3>${g.id ? "Edit gear" : "Add gear"}</h3><div class="small muted">Distance and time accrue from workouts tagged to it.</div></div><button class="icon-btn" data-close>${I("x")}</button></div>
+  <form class="modal-b" id="gf" autocomplete="off">
+    <div class="form-grid">
+      <label class="field"><span>Name</span><input name="name" value="${esc(g.name || "")}" placeholder="e.g. Pegasus 40 #2" required></label>
+      <label class="field"><span>Type</span><input name="kind" value="${esc(g.kind || "")}" placeholder="Shoes, Bike, Chain, Wetsuit…"></label>
+      <div class="field full"><span>Used for</span><div class="chips" data-multi="sports">${sports.map((s) => `<label><input type="checkbox" name="sports" value="${s}" ${(g.sports || []).includes(s) ? "checked" : ""}><span style="--c:${col(s)}"><i></i>${s}</span></label>`).join("")}</div></div>
+      <label class="field"><span>Purchased</span><input type="date" name="purchased" value="${g.purchased || ""}"></label>
+      <label class="field"><span>Retire at <span class="faint" style="font-weight:400">optional</span></span><div class="adorn"><input name="retire" type="number" step="any" min="0" value="${esc(g.retire_ui || "")}"><em>${esc(BOOT.dist_unit)}</em></div></label>
+      <div class="field full"><label class="switch"><input type="checkbox" name="is_default" ${g.is_default ? "checked" : ""}><b></b><span class="small muted">Default for these sports</span></label>
+        <span class="help">Workouts in these sports attach to this item automatically unless you pick another on the workout form.</span></div>
+      <label class="field full"><span>Notes</span><textarea name="notes" rows="2" placeholder="Resoled, retired teammate's old bike…">${esc(g.notes || "")}</textarea></label>
+    </div>
+  </form>
+  <div class="modal-f">${g.id ? `<button class="btn" id="gRetire">${g.active ? "Retire" : "Reactivate"}</button><button class="btn danger" id="gDel">${I("trash")}Delete</button>` : ""}<span class="grow"></span><button class="btn" data-close>Cancel</button><button class="btn primary" id="gSave">${I("check")}Save</button></div>`,
+          { width: 560 },
+        );
+        const f = $("#gf");
+        $("#gSave").onclick = async () => {
+          const o = formValues(f);
+          if (g.id) o.id = g.id;
+          const r = await call("save_gear", o);
+          if (!r.ok) return toast("Could not save", r.error, "bad");
+          closeModal();
+          toast(g.id ? "Gear updated" : "Gear added", f.name.value);
+          GEAR = null;
+          drawGear();
+        };
+        if ($("#gRetire"))
+          $("#gRetire").onclick = async () => {
+            await call("set_gear_active", g.id, !g.active);
+            closeModal();
+            toast(g.active ? "Gear retired" : "Gear reactivated", f.name.value, "ok");
+            drawGear();
+          };
+        if ($("#gDel"))
+          $("#gDel").onclick = async () => {
+            closeModal();
+            deleted(await call("delete_gear", g.id), g.name, () => drawGear());
+          };
+      }
+
       // ------------------------------------------------------------------ updates
       // Nothing downloads on its own. A check reports a version number; the download happens on a click, and the
       // new build is only put in place for the next launch - the running app is never swapped underneath you.
@@ -9887,6 +10010,46 @@
               ? `${esc(r.device)} is ready${r.same ? " &mdash; you already have its files" : " with files you have not loaded yet"}`
               : esc(r.error);
           };
+      }
+
+      async function drawErrorLog() {
+        const list = await call("error_log_list");
+        $("#errLogCard").innerHTML = `<div class="card-h"><div><h3>${I("bolt")} Error log</h3>
+      <div class="sub">Engine errors caught on this phone, traceback included. Nothing leaves it unless you share it.</div></div></div>
+    <div class="card-b">${
+      list.length
+        ? `<div class="hublist">${list
+            .map(
+              (e, i) => `<label style="cursor:pointer" data-i="${i}"><span style="align-items:flex-start"><span style="display:block">
+          <b>${esc(e.method)}</b><em style="margin:2px 0 0;display:block;font-size:11.5px">${esc(new Date(e.at).toLocaleString())} &middot; ${esc(e.preview)}</em></span></span></label>`,
+            )
+            .join("")}</div>
+      <div class="row wrap" style="margin-top:12px;gap:8px"><button type="button" class="btn sm danger" id="errLogClear">${I("trash")}Clear log</button></div>`
+        : `<div class="small muted">No errors caught yet.</div>`
+    }</div>`;
+        $$("#errLogCard [data-i]").forEach((el) => (el.onclick = () => showErrorEntry(+el.dataset.i)));
+        if ($("#errLogClear"))
+          $("#errLogClear").onclick = async () => {
+            if (!(await confirmBox("Clear error log", "This removes every captured error from this phone. It cannot be undone.", "Clear", true))) return;
+            await call("error_log_clear");
+            drawErrorLog();
+          };
+      }
+      async function showErrorEntry(i) {
+        const e = await call("error_log_entry", i);
+        if (!e) return;
+        const m = modal(
+          `<div class="modal-h"><h3>${esc(e.method)}</h3></div>
+      <div class="modal-b"><div class="small muted">${esc(new Date(e.at).toLocaleString())} &middot; ${esc(e.source.label || e.source.from || "unknown")}${e.source.version ? " " + esc(e.source.version) : ""}</div>
+        <pre style="white-space:pre-wrap;font-size:11.5px;margin-top:10px;max-height:40vh;overflow:auto">${esc(e.error)}</pre></div>
+      <div class="modal-f"><span class="grow"></span><button class="btn" data-close>Close</button><button class="btn primary" id="errShare">${I("up")}Share</button></div>`,
+          { width: 520 },
+        );
+        $("#errShare", m).onclick = async () => {
+          const r = await call("error_log_share", i);
+          if (!r.ok) return toast("Could not share", r.error || "", "bad");
+          toast(r.copied ? "Copied to clipboard" : "Shared");
+        };
       }
       let syncing = false;
       async function syncTap() {
@@ -10333,6 +10496,20 @@
       </form><button class="btn primary mwide" id="swGo">Calculate &amp; save</button><div id="swOut" class="small" style="margin-top:10px"></div>`,
     )}
     ${mpFold(
+      "caffeine",
+      "Caffeine",
+      `${d.caffeine.habitual_mg} mg/day habitual · ${d.caffeine.sensitivity} sensitivity`,
+      `${
+        d.caffeine.session
+          ? `<div class="mn-facts" style="margin-top:10px">
+        <div>${I("bolt")}<span><b>${d.caffeine.session.mg} mg</b> for today's ${esc(d.caffeine.session.sport.toLowerCase())}<small>${d.caffeine.session.mg_per_kg} mg/kg${d.caffeine.session.capped ? " · capped" : ""}</small></span></div></div>
+      <div class="mn-principles" style="margin-top:10px">${d.caffeine.session.splits.map((s) => `<div><b>${esc(s.when)}</b><span>${s.mg} mg</span></div>`).join("")}</div>
+      <div class="small muted" style="margin-top:10px">${esc(d.caffeine.session.basis)}</div>`
+          : `<div class="small muted" style="margin-top:10px">No session today long enough (45 min+) to need a caffeine strategy.</div>`
+      }
+      <div class="small muted" style="margin-top:10px">Training input, not medical advice. Habitual intake and sensitivity are set in <a href="#" onclick="go('profile');return false">Settings</a>.</div>`,
+    )}
+    ${mpFold(
       "principles",
       "Principles",
       "General guidance for healthy adults. Not medical advice.",
@@ -10693,7 +10870,7 @@
     <div class="mh-top"><span class="badge" style="--c:${KIND_C[i.kind]}"><i></i>${i.kind}</span><span class="small muted">Day ${i.days} · since ${esc(i.since)}</span></div>
     <h2>${esc(i.name)}</h2>
     <div class="small muted">${i.sports.length ? "Limits " + i.sports.map(esc).join(", ") : i.kind === "Illness" || i.kind === "Fatigue" ? "Affects all training" : "Training adjusted"}</div>
-    <p>${sevPill(i)} ${esc(i.sev_help)}${i.kind === "Injury" ? " A 15-minute rehab session is added every day." : ""} Once resolved, training ramps back over two weeks.</p>
+    <p>${sevPill(i)} ${esc(i.sev_help)}${i.kind === "Injury" ? " A 15-minute rehab session is added every day." : ""} Once resolved, you'll set a graded ramp instead of jumping straight back to the full plan.</p>
     <div class="small muted" style="font-weight:600;margin-bottom:6px">Severity</div>
     <div class="seg rate" data-sev="${i.id}">${[1, 2, 3, 4, 5].map((n) => `<button class="${n === i.severity ? "on" : ""}" data-n="${n}" title="${esc(d.severity[n])}: ${esc(d.severity_help[n])}">${n}</button>`).join("")}</div>
     ${i.red_flags ? `<div class="flags" style="margin-top:12px"><b>${I("info")} Get it checked</b><span>${esc(i.red_flags)}</span></div>` : ""}
@@ -10730,14 +10907,7 @@
   <div class="small muted" style="margin:14px 2px 0">General guidance, not a diagnosis. See a doctor or physio when anything under "Get it checked" applies.</div>
   </div>`;
         $$("[data-edit]").forEach((b) => (b.onclick = () => openIssue(byId(b.dataset.edit))));
-        $$("[data-resolve]").forEach(
-          (b) =>
-            (b.onclick = async () => {
-              await call("resolve_issue", +b.dataset.resolve);
-              toast("Marked resolved", "Training ramps back over the next two weeks.");
-              refreshAll();
-            }),
-        );
+        $$("[data-resolve]").forEach((b) => (b.onclick = () => openResolve(byId(b.dataset.resolve))));
         $$("[data-sev]").forEach((g) =>
           $$("button", g).forEach(
             (b) =>
@@ -11028,7 +11198,8 @@
         <div class="mpbtns"><button type="button" class="btn" onclick="openSetup()">${I("refresh")}Run setup again</button><button type="button" class="btn" id="expAll">${I("down")}Export all data</button><button type="button" class="btn" id="impAll">${I("up")}Restore from export</button></div></div></div>
       <div class="card" id="syncCard" style="margin-top:10px"></div>
       <div class="card" id="appSrcCard" style="margin-top:10px"></div>
-      <div class="card" id="healthCard" style="margin-top:10px"></div></div>
+      <div class="card" id="healthCard" style="margin-top:10px"></div>
+      <div class="card" id="gearCard" style="margin-top:10px"></div></div>
     <div class="savebar"><span class="pill warn" id="dirty" style="display:none">Unsaved changes</span><span class="grow"></span>
       <button type="button" class="btn" id="pfReset">Discard</button><button type="submit" class="btn primary">${I("check")}Save settings</button></div></form></div>`;
         $$(".mpfold").forEach((f) => {
@@ -11048,6 +11219,7 @@
         drawPhoneSync();
         drawAppSource();
         drawHealth();
+        drawGear();
         $("#expAll").onclick = async () => {
           const r = await call("export_all");
           if (!r.cancelled) toast("Data exported", r.path);

@@ -65,6 +65,10 @@ ISSUE_KINDS = ["Injury", "Illness", "Fatigue", "Other"]
 
 SEVERITY = {1: "Niggle", 2: "Mild", 3: "Moderate", 4: "Severe", 5: "Can't train"}
 
+DEFAULT_RAMP_DAYS = 14  # fallback for issues resolved before a ramp length was stored
+
+RAMP_BASE_DAYS = {1: 5, 2: 7, 3: 10, 4: 14, 5: 21}  # floor on the graded return, by severity
+
 LOWER = ["Run", "Hike", "Walk"]
 
 ORDER = ["rest", "easy", "moderate", "normal", "push"]
@@ -147,16 +151,31 @@ CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS races(id INTEGER PRIMARY KEY, name TEXT, date TEXT, preset TEXT, legs TEXT,
     priority TEXT, temp_c REAL, t1 REAL, t2 REAL, goal_s REAL, result_s REAL, notes TEXT);
 CREATE TABLE IF NOT EXISTS issues(id INTEGER PRIMARY KEY, kind TEXT, name TEXT, area TEXT, side TEXT, severity INTEGER,
-    sports TEXT, start TEXT, "end" TEXT, notes TEXT);
+    sports TEXT, start TEXT, "end" TEXT, notes TEXT, ramp_days INTEGER);
 CREATE TABLE IF NOT EXISTS habits(id INTEGER PRIMARY KEY, uid TEXT, name TEXT, days TEXT, sort INTEGER, archived INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS habit_log(hkey TEXT PRIMARY KEY, habit TEXT, date TEXT, done INTEGER);
 CREATE TABLE IF NOT EXISTS reminders(id INTEGER PRIMARY KEY, uid TEXT, title TEXT, time TEXT, days TEXT, active INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS quotes(id INTEGER PRIMARY KEY, uid TEXT, text TEXT, author TEXT);
 CREATE TABLE IF NOT EXISTS scheduled(id INTEGER PRIMARY KEY, uid TEXT, date TEXT, time TEXT, sport TEXT, kind TEXT,
     dur_s REAL, dist_km REAL, notes TEXT);
+CREATE TABLE IF NOT EXISTS gear(id INTEGER PRIMARY KEY, name TEXT, kind TEXT, sports TEXT, purchased TEXT,
+    retire_km REAL, active INTEGER DEFAULT 1, is_default INTEGER DEFAULT 0, notes TEXT);
 """
 
-DATA_TABLES = ("workouts", "wellness", "races", "issues", "habits", "habit_log", "reminders", "quotes", "scheduled")
+DATA_TABLES = (
+    "workouts",
+    "wellness",
+    "races",
+    "issues",
+    "habits",
+    "habit_log",
+    "reminders",
+    "quotes",
+    "scheduled",
+    "gear",
+)
+
+GEAR_WARN_PCT = 90  # retire-at warning kicks in this close to the limit; 100+ is past it
 
 # ---------------------------------------------------------------- sync (desktop hub <-> phones over Wi-Fi)
 # Every synced row has a permanent id (uid; wellness uses its date), `updated` (ms, the edit time used for
@@ -172,6 +191,7 @@ SYNC_TABLES = {
     "reminders": "uid",
     "quotes": "uid",
     "scheduled": "uid",
+    "gear": "uid",
 }
 
 LOCAL_KEYS = {
@@ -328,6 +348,8 @@ DEFAULTS = dict(
     gel_carbs=25.0,
     sweat_rate=1.0,
     sweat_na=900.0,
+    caffeine_mg=0.0,
+    caffeine_sensitivity="normal",
     theme="system",
     checklist=[],
     setup_done=False,
@@ -902,6 +924,10 @@ COPY = {
     "pr.source.block": "Best block of a longer session",
     "pr.source.pace": "Average pace of a {dist} session",
     "pr.source.profile": "Profile benchmark race",
+    "pr.trend.none": "Not enough dated history here yet to project a trend",
+    "pr.trend.flat": "Your times here aren't trending down, so there's no honest rate to project from",
+    "pr.trend.eta": "At your current rate of improvement, around {date}",
+    "pr.trend.arrived": "Your recent trend already clears it - log one more effort to confirm",
 }
 
 HARD_IF = 0.82  # at or above this a session is "hard" - tempo and up
@@ -1060,6 +1086,12 @@ PROFILE_META = {
     "gel_carbs": ("Carbs per gel", "float", "g · for gel counts"),
     "sweat_rate": ("Sweat rate", "vol", "per hour · use the sweat test"),
     "sweat_na": ("Sweat sodium", "float", "mg/L · typical 400–1500"),
+    "caffeine_mg": ("Habitual daily caffeine", "float", "mg · a coffee is ~95 mg, an energy drink ~80 mg"),
+    "caffeine_sensitivity": (
+        "Caffeine sensitivity",
+        ("select", [("low", "Low (well tolerated)"), ("normal", "Normal"), ("high", "High (gets jittery easily)")]),
+        "Sets where in the 3–6 mg/kg range race-day dosing sits",
+    ),
     "theme": ("Theme", ("select", [("system", "Match Windows"), ("light", "Light"), ("dark", "Dark")]), ""),
     "team_on": (
         "I train with a team or coach",
@@ -1115,7 +1147,20 @@ PROFILE_SECTIONS = [
         ],
     ),
     ("Team or coach", ["team_on", "team_days", "team_min", "team_label", "team_sport", "team_time"]),
-    ("Nutrition & hydration", ["goal", "activity", "protein_gkg", "gut_carbs", "gel_carbs", "sweat_rate", "sweat_na"]),
+    (
+        "Nutrition & hydration",
+        [
+            "goal",
+            "activity",
+            "protein_gkg",
+            "gut_carbs",
+            "gel_carbs",
+            "sweat_rate",
+            "sweat_na",
+            "caffeine_mg",
+            "caffeine_sensitivity",
+        ],
+    ),
     ("Bike equipment", ["cda", "bike_kg"]),
     ("Appearance", ["theme"]),
 ]
@@ -1819,6 +1864,43 @@ def _steps(ref, p, sport, km):
     return steps
 
 
+def _rank_trend(hits, goal_secs):
+    """How this event's logged times are moving, in plain words, toward goal_secs - the next rank's time.
+
+    Fit a line through dated efforts only (the undated profile benchmark can't anchor a rate), collapsing
+    same-day entries to their best first so a single busy week doesn't out-vote months of real spread. Too
+    few distinct dates, or a trend that is flat or going the wrong way, says so rather than printing a
+    confident date built on noise - showing the reasoning is the point, not just the number.
+    """
+    if not goal_secs:
+        return None
+    by_date = {}
+    for secs, date, _ in hits:
+        if date:
+            by_date[date] = min(secs, by_date.get(date, secs))
+    pts = sorted(by_date.items())
+    if len(pts) < 3:
+        return say("pr.trend.none")
+    x0 = dt.date.fromisoformat(pts[0][0]).toordinal()
+    xs = [dt.date.fromisoformat(d).toordinal() - x0 for d, _ in pts]
+    ys = [s for _, s in pts]
+    n = len(xs)
+    mx, my = sum(xs) / n, sum(ys) / n
+    varx = sum((x - mx) ** 2 for x in xs)
+    if varx == 0:  # every dated effort fell on the same day - no spread to fit a rate to
+        return say("pr.trend.none")
+    slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / varx
+    if slope >= 0:  # times holding flat or getting slower - no rate to project forward
+        return say("pr.trend.flat")
+    today_x = dt.date.today().toordinal() - x0
+    pred_today = my + slope * (today_x - mx)
+    if pred_today <= goal_secs:
+        return say("pr.trend.arrived")
+    eta = dt.date.today() + dt.timedelta(days=(goal_secs - pred_today) / slope)
+    year = f", {eta.year}" if (eta - dt.date.today()).days > 300 else ""  # a far-out date needs its year too
+    return say("pr.trend.eta", date=f"{eta:%b} {eta.day}{year}")
+
+
 def _ranked(hits, ref, p, label, **extra):
     """One ranked row from a list of (secs, date, source): the best, what it beat, and what the next tier costs.
 
@@ -1846,6 +1928,9 @@ def _ranked(hits, ref, p, label, **extra):
         gain=hms(prev - secs) if prev and prev > secs else "",
         to_next=hms(secs - goal) if goal and goal < secs else "",
         next_time=hms(goal) if goal else "",
+        trend=_rank_trend(hits, goal),
+        age_graded=af != 1.0,
+        open=tier_of(round(ref / max(1.0, secs) * 100, 1)),
         **extra,
         **t,
     )
@@ -2658,8 +2743,32 @@ def issue_from_row(r):
         sports=json.loads(r["sports"] or "[]"),
         start=r["start"],
         end=r["end"] or None,
+        ramp_days=r["ramp_days"],
         notes=r["notes"] or "",
     )
+
+
+def gear_from_row(r):
+    return dict(
+        id=r["id"],
+        name=r["name"],
+        kind=r["kind"] or "Other",
+        sports=json.loads(r["sports"] or "[]"),
+        purchased=r["purchased"] or "",
+        retire_km=r["retire_km"],
+        active=bool(r["active"]),
+        is_default=bool(r["is_default"]),
+        notes=r["notes"] or "",
+    )
+
+
+def suggest_ramp_days(i, end=None):
+    """How long the graded return should run: a floor from severity, stretched for an episode that dragged on -
+    a few lost days barely need easing back into, a month out does."""
+    sev = int(i["severity"] or 1)
+    end = end or i.get("end")
+    episode = (dt.date.fromisoformat(end) - dt.date.fromisoformat(i["start"])).days + 1 if end else 1
+    return max(RAMP_BASE_DAYS.get(sev, 10), min(28, round(episode * 0.5)))
 
 
 def active_on(issues, day):
@@ -2680,7 +2789,11 @@ def adapt_session(p, s, issues):
     if sport in ("Race", "Rest", "Mobility"):
         return [list(s)]
     act = active_on(issues, day)
-    recent = [i for i in issues if i["end"] and 0 < (day - dt.date.fromisoformat(i["end"])).days <= 14]
+    recent = [
+        i
+        for i in issues
+        if i["end"] and 0 < (day - dt.date.fromisoformat(i["end"])).days <= (i.get("ramp_days") or DEFAULT_RAMP_DAYS)
+    ]
     if not act and not recent:
         return [list(s)]
     notes, factor, easy, swapped = [], 1.0, False, None
@@ -2719,8 +2832,10 @@ def adapt_session(p, s, issues):
         if i["kind"] == "Injury" and sport not in i["sports"]:
             continue
         since = (day - dt.date.fromisoformat(i["end"])).days
-        f = (0.5 if since <= 7 else 0.75) if i["kind"] != "Fatigue" else 0.8
-        factor, easy = min(factor, f), easy or since <= 7
+        ramp = i.get("ramp_days") or DEFAULT_RAMP_DAYS
+        half = max(1, ramp // 2)  # first half of the ramp at half volume, second half at three-quarters
+        f = (0.5 if since <= half else 0.75) if i["kind"] != "Fatigue" else 0.8
+        factor, easy = min(factor, f), easy or since <= half
         notes.append(f"Returning after {i['name']}: {f:.0%} volume")
     if not notes:
         return [list(s)]
@@ -3266,6 +3381,65 @@ def fuel_session(p, sport, dur_s, IF=0.72, hot=False):
     return L
 
 
+CAFFEINE_MG_PER_KG = {"low": 6.0, "normal": 4.5, "high": 3.0}  # sensitivity -> where in the 3-6 mg/kg band to sit
+CAFFEINE_CAP_MG = 400.0  # FDA/EFSA generally-safe daily ceiling for a healthy adult - a dose never exceeds this
+
+
+def caffeine_dose(p, dur_s):
+    """Pre-session caffeine, scaled to body weight and split across long events. Not medical advice."""
+    kg = p["weight_kg"]
+    sens = p.get("caffeine_sensitivity") or "normal"
+    mgkg = CAFFEINE_MG_PER_KG.get(sens, 4.5)
+    raw = kg * mgkg
+    total = min(raw, CAFFEINE_CAP_MG)
+    h = (dur_s or 0) / 3600
+    if h >= 3:  # split so the second half still has it on board, rather than one big jittery hit
+        pre = round(total * 0.6 / 5) * 5
+        splits = [
+            dict(when="45-60 min before", mg=round(pre)),
+            dict(when=f"~{hms(dur_s / 2)} in (halfway)", mg=round(total - pre)),
+        ]
+    else:
+        splits = [dict(when="45-60 min before", mg=round(total))]
+    return dict(
+        mg=round(total),
+        mg_per_kg=round(total / kg, 1),
+        sensitivity=sens,
+        splits=splits,
+        capped=raw > CAFFEINE_CAP_MG + 1e-6,
+        basis=(
+            f"{mgkg:.1f} mg/kg (within the usual 3-6 mg/kg sports-nutrition range for your {sens} sensitivity), "
+            f"capped at {CAFFEINE_CAP_MG:.0f} mg - above that the side-effect risk (jitters, GI upset, racing heart) "
+            "rises faster than any further performance benefit."
+        ),
+    )
+
+
+def caffeine_deload(p, days_out=None):
+    """Optional taper of habitual caffeine before a race, so the race-day dose still has a real effect."""
+    habitual = p.get("caffeine_mg") or 0
+    if habitual < 100:
+        return dict(
+            needed=False, days=0, note="Habitual intake is low enough that race day will already feel like a boost."
+        )
+    days = 3 if habitual < 300 else 5
+    if days_out is not None and days_out < days:
+        return dict(
+            needed=True,
+            days=days_out,
+            note=f"Only {days_out} day(s) out - taper what you can; a full taper is {days} days "
+            "for your habitual intake.",
+        )
+    return dict(
+        needed=True,
+        days=days,
+        note=(
+            f"Starting {days} days before the race, cut your usual caffeine roughly in half each day toward zero. "
+            "Taper rather than quit cold - that avoids withdrawal headaches and fatigue clouding race week."
+        ),
+    )
+
+
 def race_fueling(p, race, pred):
     kg, gel = p["weight_kg"], p.get("gel_carbs") or 25
     total_h = (pred["total"] or 3600) / 3600
@@ -3291,7 +3465,22 @@ def race_fueling(p, race, pred):
             f"{(2 if total_h >= 1.25 else 1) * kg:.0f}–{(3 if total_h >= 1.25 else 2) * kg:.0f} g carbs + ~{fd('vol', 0.5)} fluid. Bagel + honey + banana + sports drink.",
         )
     )
-    tl.append(("−60 min", "Caffeine (optional)", f"{3 * kg:.0f} mg, only if practised."))
+    caf = caffeine_dose(p, pred["total"] or 3600)
+    if p.get("caffeine_mg"):
+        try:
+            days_out = (dt.date.fromisoformat(race["date"]) - dt.date.today()).days
+        except (KeyError, ValueError, TypeError):
+            days_out = None
+        deload = caffeine_deload(p, days_out)
+        if deload["needed"] and (days_out is None or 0 < days_out <= deload["days"] + 1):
+            tl.append((f"{deload['days']} days out", "Caffeine deload", deload["note"]))
+    tl.append(
+        (
+            "45-60 min before",
+            "Caffeine (optional)",
+            f"{caf['splits'][0]['mg']:.0f} mg, only if practised. {caf['basis']}",
+        )
+    )
     if total_h >= 1:
         tl.append(("−15 min", "Pre-start gel", f"One gel (~{gel:.0f} g carbs) + a few sips of water."))
         grams += gel
@@ -3315,6 +3504,15 @@ def race_fueling(p, race, pred):
                 )
                 + f"{fd('vol', fluid)}/h fluid, ~{na:.0f} mg sodium/h."
                 + extra,
+            )
+        )
+    if len(caf["splits"]) > 1:
+        sp = caf["splits"][1]
+        tl.append(
+            (
+                sp["when"],
+                "Caffeine (optional)",
+                f"{sp['mg']:.0f} mg - the rest of the dose, split rather than taken all at once.",
             )
         )
     tl.append(
@@ -3608,11 +3806,14 @@ def open_db(path=DB_PATH):
         ("wx_code", "INTEGER"),
         ("indoor", "INTEGER DEFAULT 0"),
         ("splits", "TEXT"),
+        ("gear_id", "INTEGER"),
     ):
         if col not in [c[1] for c in db.execute("PRAGMA table_info(workouts)")]:
             db.execute(f"ALTER TABLE workouts ADD COLUMN {col} {typ}")
     if "start" not in [c[1] for c in db.execute("PRAGMA table_info(races)")]:
         db.execute("ALTER TABLE races ADD COLUMN start TEXT")
+    if "ramp_days" not in [c[1] for c in db.execute("PRAGMA table_info(issues)")]:
+        db.execute("ALTER TABLE issues ADD COLUMN ramp_days INTEGER")
     db.execute("CREATE INDEX IF NOT EXISTS workouts_date ON workouts(date)")
     add_sync_columns(db)
     db.commit()
@@ -3978,6 +4179,31 @@ class Api:
     def _issues(self):
         return [issue_from_row(r) for r in self._db.execute("SELECT * FROM issues ORDER BY start DESC, id DESC")]
 
+    def _gear(self):
+        return [gear_from_row(r) for r in self._db.execute("SELECT * FROM gear ORDER BY active DESC, name")]
+
+    def _gear_totals(self):
+        """dist_km/dur_s accrued per gear item, summed straight off the workout log."""
+        rows = self._db.execute(
+            "SELECT gear_id, SUM(dist_km) dist_km, SUM(dur_s) dur_s FROM workouts "
+            "WHERE gear_id IS NOT NULL GROUP BY gear_id"
+        )
+        return {r["gear_id"]: (r["dist_km"] or 0, r["dur_s"] or 0) for r in rows}
+
+    def _default_gear_id(self, sport):
+        return next((g["id"] for g in self._gear() if g["active"] and g["is_default"] and sport in g["sports"]), None)
+
+    def _resolve_gear_id(self, sport, raw):
+        """"" (no override) follows the default for the sport; "none" opts out of auto-assignment entirely."""
+        if raw in (None, ""):
+            return self._default_gear_id(sport)
+        if raw == "none":
+            return None
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return self._default_gear_id(sport)
+
     def _races(self, forecast=True):
         rs = [race_from_row(r) for r in self._db.execute("SELECT * FROM races ORDER BY date, id")]
         for r in (
@@ -4076,6 +4302,7 @@ class Api:
                 w=_f(w["avg_w"]),
                 notes=w["notes"] or "",
                 indoor=bool(w["indoor"]),
+                gear_id=w["gear_id"] or "",
             ),
         )
 
@@ -4205,6 +4432,9 @@ class Api:
             P["goal"],
         )
         ramp = ctl - series[-8][1] if len(series) > 8 else 0
+        # ACWR (state["acwr"]) is the sharper read on the same "loading too fast" risk; once it has already
+        # flagged the week, the coarser CTL-ramp check stays quiet instead of raising a second, redundant alarm.
+        ramp_warn = ramp > 8 and (state["acwr"] is None or state["acwr"] < 1.35)
         labels = [d.isoformat() for d, *_ in both]
         markers = [
             dict(i=labels.index(r["date"]), name=r["name"], p=r["priority"]) for r in races if r["date"] in labels
@@ -4216,7 +4446,7 @@ class Api:
             tsb=round(tsb),
             form=form_label(tsb),
             ramp=round(ramp, 1),
-            ramp_warn=ramp > 8,
+            ramp_warn=ramp_warn,
             next_race=(
                 dict(
                     id=nxt["id"],
@@ -4377,6 +4607,7 @@ class Api:
         return dict(
             rows=[self._wrow(w) for w in rows],
             sports=[s for s in ALL_SPORTS if s in P["sports"] or any(w["sport"] == s for w in rows)],
+            gear=[dict(id=g["id"], name=g["name"], sports=g["sports"]) for g in self._gear() if g["active"]],
             stats=dict(
                 week_h=round(sum(w["dur_s"] or 0 for w in wk) / 3600, 1),
                 week_n=len(wk),
@@ -4418,6 +4649,7 @@ class Api:
         except (ValueError, TypeError) as e:
             return dict(ok=False, error=str(e) or "Check the form")
         indoor = 1 if f.get("indoor") not in (None, "", False, "false", "0") else 0
+        gear_id = self._resolve_gear_id(rec[1], f.get("gear_id"))
         if f.get("id"):
             # GPS splits describe the session that was recorded. Correcting a note or a heart rate leaves them
             # true; changing how far or how long it was does not, and stale splits would go on feeding best
@@ -4430,16 +4662,16 @@ class Api:
             reshaped = was and (abs((was["dur_s"] or 0) - rec[2]) > 1 or abs((was["dist_km"] or 0) - rec[3]) > 0.005)
             self._db.execute(
                 "UPDATE workouts SET date=?,sport=?,dur_s=?,dist_km=?,rpe=?,avg_hr=?,avg_w=?,tss=?,kcal=?,"
-                "notes=?,indoor=?,wx_temp=NULL,wx_dew=NULL,wx_code=NULL"
+                "notes=?,indoor=?,gear_id=?,wx_temp=NULL,wx_dew=NULL,wx_code=NULL"
                 + (",splits=NULL" if reshaped else "")
                 + " WHERE id=?",
-                rec + (indoor, int(f["id"])),
+                rec + (indoor, gear_id, int(f["id"])),
             )
         else:
             self._db.execute(
-                "INSERT INTO workouts(date,sport,dur_s,dist_km,rpe,avg_hr,avg_w,tss,kcal,notes,indoor) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                rec + (indoor,),
+                "INSERT INTO workouts(date,sport,dur_s,dist_km,rpe,avg_hr,avg_w,tss,kcal,notes,indoor,gear_id) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                rec + (indoor, gear_id),
             )
         if self._wx:
             self._stamp_weather()
@@ -4459,14 +4691,30 @@ class Api:
         kcal = estimate_kcal(P, sport, dur, dist, None, tss)
         splits = json.dumps(f["splits"]) if f.get("splits") else None
         indoor = 1 if f.get("indoor") not in (None, "", False, "false", "0") else 0
+        gear_id = self._resolve_gear_id(sport, f.get("gear_id"))
         try:  # the native side stamps UTC ("...Z"); everything downstream compares against naive local times
             start = _stamp(_local(dt.datetime.fromisoformat(str(f["start"]).strip()))) if f.get("start") else None
         except ValueError:
             start = None
         self._db.execute(
-            "INSERT INTO workouts(date,start,sport,dur_s,dist_km,rpe,avg_hr,avg_w,tss,kcal,notes,indoor,splits) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (date, start, sport, dur, dist, None, hr, None, tss, kcal, (f.get("notes") or "").strip(), indoor, splits),
+            "INSERT INTO workouts(date,start,sport,dur_s,dist_km,rpe,avg_hr,avg_w,tss,kcal,notes,indoor,splits"
+            ",gear_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                date,
+                start,
+                sport,
+                dur,
+                dist,
+                None,
+                hr,
+                None,
+                tss,
+                kcal,
+                (f.get("notes") or "").strip(),
+                indoor,
+                splits,
+                gear_id,
+            ),
         )
         if self._wx and not indoor:
             self._stamp_weather()
@@ -5100,6 +5348,13 @@ class Api:
                     else "Normal fluid needs today."
                 ),
             )
+        key_sess = max(sess, key=lambda s: s[1], default=None)  # the day's longest session, if any
+        caffeine = dict(
+            habitual_mg=round(P.get("caffeine_mg") or 0), sensitivity=P.get("caffeine_sensitivity") or "normal"
+        )
+        if key_sess and key_sess[1] >= 2700 and key_sess[0] != "Race":  # worth a dosing strategy from ~45 min up
+            dose = caffeine_dose(P, key_sess[1])
+            caffeine["session"] = dict(sport=key_sess[0], dur=hms(key_sess[1]), **dose)
         return dict(
             date=day.isoformat(),
             nice=f"{day:%A, %B} {day.day}",
@@ -5119,6 +5374,7 @@ class Api:
             heat=heat,
             race=dict(id=race[5], name=race[4].split(" (")[0]) if race else None,
             sweat_rate=fd("vol", P["sweat_rate"]),
+            caffeine=caffeine,
             principles=[
                 ("Fuel the work", "Carbs rise and fall with training load. Hard or long days are not the day to diet."),
                 (
@@ -5251,6 +5507,7 @@ class Api:
         end = dt.date.fromisoformat(i["end"]) if i["end"] else None
         area = BODY.get(i["area"], BODY["Other"]) if i["kind"] == "Injury" else None
         active = start <= today and (not end or today <= end)
+        ramp_left = max(0, (i["ramp_days"] or 0) - (today - end).days) if end else 0
         return dict(
             i,
             active=active,
@@ -5262,6 +5519,7 @@ class Api:
             rehab=area[1] if area else "",
             red_flags=area[2] if area else "",
             guidance=KIND_GUIDANCE.get(i["kind"], KIND_GUIDANCE["Other"]),
+            ramp_left=ramp_left,
         )
 
     @_locked
@@ -5327,14 +5585,99 @@ class Api:
         return dict(ok=True)
 
     @_locked
-    def resolve_issue(self, iid):
-        self._db.execute('UPDATE issues SET "end"=? WHERE id=?', (dt.date.today().isoformat(), int(iid)))
+    def suggest_ramp(self, iid):
+        i = next((x for x in self._issues() if x["id"] == int(iid)), None)
+        if not i:
+            return dict(ok=False, error="Issue not found")
+        return dict(ok=True, days=suggest_ramp_days(i, dt.date.today().isoformat()))
+
+    @_locked
+    def resolve_issue(self, iid, ramp_days=None):
+        i = next((x for x in self._issues() if x["id"] == int(iid)), None)
+        if not i:
+            return dict(ok=False, error="Issue not found")
+        end = dt.date.today().isoformat()
+        ramp = int(ramp_days) if ramp_days not in (None, "") else suggest_ramp_days(i, end)
+        ramp = max(0, min(42, ramp))
+        self._db.execute('UPDATE issues SET "end"=?,ramp_days=? WHERE id=?', (end, ramp, int(iid)))
         self._db.commit()
-        return dict(ok=True)
+        return dict(ok=True, ramp_days=ramp)
 
     @_locked
     def delete_issue(self, iid):
         return self._take("issues", "id", [int(iid)])
+
+    # ---- gear: shoes, bikes, chains, tyres, wetsuits - mileage/time accrue from the workout log, not hand-entry
+    def _gear_view(self, g, totals):
+        dist_km, dur_s = totals.get(g["id"], (0, 0))
+        pct = round(dist_km / g["retire_km"] * 100) if g["retire_km"] else None
+        return dict(
+            g,
+            dist=fd("dist", dist_km),
+            dur=hms(dur_s),
+            retire=fd("dist", g["retire_km"]) if g["retire_km"] else "",
+            retire_ui=to_ui("dist", g["retire_km"]) if g["retire_km"] else "",
+            pct=pct,
+            warn="" if pct is None else "bad" if pct >= 100 else "warn" if pct >= GEAR_WARN_PCT else "",
+        )
+
+    @_locked
+    def gear(self):
+        totals = self._gear_totals()
+        return dict(
+            items=[self._gear_view(g, totals) for g in self._gear()],  # already active-first, then by name
+            sports=self._sports(),
+            dist_unit=unit("dist"),
+        )
+
+    @_locked
+    def save_gear(self, f):
+        try:
+            name = (f.get("name") or "").strip()
+            if not name:
+                raise ValueError("Enter a name")
+            kind = (f.get("kind") or "").strip() or "Other"
+            sports = [x for x in ALL_SPORTS if x in (f.get("sports") or [])]
+            if not sports:
+                raise ValueError("Pick at least one sport")
+            purchased = dt.date.fromisoformat(f["purchased"]).isoformat() if f.get("purchased") else ""
+            retire_km = from_ui("dist", f["retire"]) if str(f.get("retire") or "").strip() else None
+            if retire_km is not None and not retire_km > 0:
+                raise ValueError("Retire-at distance must be greater than 0")
+            is_default = bool(f.get("is_default"))
+            notes = (f.get("notes") or "").strip()
+        except (ValueError, TypeError) as e:
+            return dict(ok=False, error=str(e) or "Check the form")
+        gid = int(f["id"]) if f.get("id") else None
+        rec = (name, kind, json.dumps(sports), purchased, retire_km, int(is_default), notes)
+        if gid:
+            self._db.execute(
+                "UPDATE gear SET name=?,kind=?,sports=?,purchased=?,retire_km=?,is_default=?,notes=? WHERE id=?",
+                rec + (gid,),
+            )
+        else:
+            self._db.execute(
+                "INSERT INTO gear(name,kind,sports,purchased,retire_km,active,is_default,notes) "
+                "VALUES(?,?,?,?,?,1,?,?)",
+                rec,
+            )
+            gid = self._db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        if is_default:  # only one default per sport: unclaim it from any other item that shares one
+            for g in self._gear():
+                if g["id"] != gid and g["is_default"] and set(g["sports"]) & set(sports):
+                    self._db.execute("UPDATE gear SET is_default=0 WHERE id=?", (g["id"],))
+        self._db.commit()
+        return dict(ok=True)
+
+    @_locked
+    def set_gear_active(self, gid, active):
+        self._db.execute("UPDATE gear SET active=? WHERE id=?", (1 if active else 0, int(gid)))
+        self._db.commit()
+        return dict(ok=True)
+
+    @_locked
+    def delete_gear(self, gid):
+        return self._take("gear", "id", [int(gid)])
 
     # ---- first-run setup
     @_locked
@@ -6635,14 +6978,16 @@ def discover_hub(last_host, code, budget=30):
     known = ip.count(".") == 3 and all(part.isdigit() for part in ip.split("."))
     end, alive, found = time.time() + budget, set(), []
     for host, _name in (browse_hubs(min(2.5, budget)) if budget > 0 else []):
-        if time.time() > end:  # ask the network who is there before guessing at addresses
+        if time.time() >= end:  # ask the network who is there before guessing at addresses
             return None
         if probe_hub(host, code) == "hit":
             return host
 
     def sweep(hosts):
         def probe(h):
-            if found or time.time() > end:  # someone already hit, or we are out of time: stop paying for probes
+            # Windows' clock ticks about every 15 ms, so a zero budget lands on exactly `end` rather than past
+            # it - compare inclusively or a caller asking for no sweep still gets one.
+            if found or time.time() >= end:  # someone already hit, or we are out of time: stop paying for probes
                 return
             r = probe_hub(h, code)
             if r == "hit":
