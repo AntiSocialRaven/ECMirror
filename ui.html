@@ -7377,7 +7377,7 @@
     </div>
     <div class="estimate" id="est"></div>
   </form>
-  <div class="modal-f">${id ? `<button class="btn danger" id="wDel">${I("trash")}Delete</button>` : ""}<span class="grow"></span><span class="small faint kbd-hint">Ctrl+Enter to save</span><button class="btn" data-close>Cancel</button><button class="btn primary" id="wSave">${I("check")}Save workout</button></div>`);
+  <div class="modal-f">${id ? `<button class="btn danger" id="wDel">${I("trash")}Delete</button>` : ""}${w.has_track ? `<button class="btn" id="wProfile">${I("bolt")}Profile</button>` : ""}<span class="grow"></span><span class="small faint kbd-hint">Ctrl+Enter to save</span><button class="btn" data-close>Cancel</button><button class="btn primary" id="wSave">${I("check")}Save workout</button></div>`);
         const f = $("#wf"),
           data = () => {
             const o = Object.fromEntries(new FormData(f));
@@ -7399,7 +7399,7 @@
         const sync = () => {
           const s = f.sport.value;
           $("#distU").textContent = s === "Swim" ? BOOT.swim_unit : BOOT.dist_unit;
-          $(".f-w", m).style.display = ["Bike", "Brick", "Row", "Other"].includes(s) ? "" : "none";
+          $(".f-w", m).style.display = ["Bike", "Brick", "Run", "Row", "Other"].includes(s) ? "" : "none";
           $(".f-dist", m).style.display = ["Strength", "Mobility"].includes(s) ? "none" : "";
           $(".f-in", m).style.display = ["Swim", "Strength", "Mobility"].includes(s) ? "none" : "";
           syncGear(s);
@@ -7436,7 +7436,39 @@
             closeModal();
             deleted(await call("delete_workouts", [id]), `${f.sport.value.toLowerCase()} on ${w.nice}`);
           };
+        if ($("#wProfile")) $("#wProfile").onclick = () => workoutProfile(id, w);
         setTimeout(() => (e.h || e.m ? f.dist : f.m).focus(), 30);
+      }
+
+      // ------------------------------------------------------------------ GPS profile (pace + elevation vs distance)
+      async function workoutProfile(id, w) {
+        const d = await call("workout_profile", id);
+        if (!d) return toast("No track", "This workout has no recorded GPS track.", "bad");
+        modal(`<div class="modal-h"><div><h3>${esc(w.sport)} profile</h3><div class="small muted">${esc(w.nice)}</div></div><button class="icon-btn" data-close>${I("x")}</button></div>
+    <div class="modal-b">
+      <div class="small muted" style="margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.06em">${esc(d.pace_label)}</div>
+      <div id="profPace" style="margin-bottom:18px"></div>
+      ${d.elev ? `<div class="small muted" style="margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.06em">Elevation</div><div id="profElev"></div>` : ""}
+    </div>
+    <div class="modal-f"><button class="btn" data-close>Close</button></div>`);
+        lineChart($("#profPace"), {
+          labels: d.labels,
+          series: [{ name: d.pace_label, color: col(w.sport), data: d.pace, area: true }],
+          height: 180,
+          xfmt: (v) => `${v} ${d.dist_unit}`,
+          yfmt: (v) => (w.sport === "Bike" ? v.toFixed(0) : fmtPace(v)),
+          tipfmt: (v) => (w.sport === "Bike" ? `${v.toFixed(1)} ${d.pace_unit}` : `${fmtPace(v)}${d.pace_unit}`),
+        });
+        if (d.elev)
+          lineChart($("#profElev"), {
+            labels: d.labels,
+            series: [{ name: "Elevation", color: "var(--muted)", data: d.elev, area: true }],
+            height: 140,
+            zero: true,
+            xfmt: (v) => `${v} ${d.dist_unit}`,
+            yfmt: (v) => v.toFixed(0),
+            tipfmt: (v) => `${v.toFixed(0)} ${d.elev_unit}`,
+          });
       }
 
       // ------------------------------------------------------------------ interval timer
@@ -7853,6 +7885,8 @@
         sport: "Run",
         unit: "km",
         target: null,
+        autoPause: true,
+        autoPaused: false,
         paused: false,
         elapsed: 0,
         dist: 0,
@@ -7883,6 +7917,10 @@
           LIVE.dist = t.dist_m;
           LIVE.pace = t.pace_s_per_unit;
           LIVE.splits = t.splits;
+          if (typeof t.autoPaused === "boolean" && t.autoPaused !== LIVE.autoPaused) {
+            LIVE.autoPaused = t.autoPaused;
+            if (PAGE === "live") paintLiveFlag();
+          }
           if (PAGE === "live") paintLiveTick();
         });
         LiveWorkout.onPaceAlert((kind) => {
@@ -7893,6 +7931,11 @@
             if (PAGE === "live") paintLiveFlag();
           }, 4000);
         });
+        if (LiveWorkout.onAutoPause)
+          LiveWorkout.onAutoPause((paused) => {
+            LIVE.autoPaused = paused;
+            if (PAGE === "live") paintLiveFlag();
+          });
       }
       function paintLiveTick() {
         if (!$("#liveTime")) return;
@@ -7912,6 +7955,11 @@
       function paintLiveFlag() {
         const el = $("#livePill");
         if (!el) return;
+        if (LIVE.autoPaused) {
+          el.className = "pill warn";
+          el.textContent = "Auto-paused";
+          return;
+        }
         el.className = "pill " + (LIVE.flag === "fast" ? "warn" : LIVE.flag === "slow" ? "bad" : "ok");
         el.textContent = LIVE.flag === "fast" ? "Ease up, too fast" : LIVE.flag === "slow" ? "Speed up" : "On pace";
       }
@@ -7951,8 +7999,10 @@
               date: BOOT.today,
               start: localIso(r.start),
               dur_s: r.dur_s,
+              elapsed_s: r.elapsed_s,
               dist_km: r.dist_km,
               splits: r.splits,
+              track: r.track,
             });
             LIVE.state = "setup";
             if (!res.ok) return toast("Could not save", res.error, "bad");
@@ -7987,6 +8037,7 @@
       <div class="seg" id="liveSport" style="margin-bottom:16px">${(opts.length ? opts : GPS_SPORTS).map((s) => `<label><input type="radio" name="liveSport" value="${s}" ${s === sport ? "checked" : ""}><span><i class="dot" style="--c:${col(s)}"></i>${s}</span></label>`).join("")}</div>
       <label class="field" id="liveTargetWrap" style="${PACE_SPORTS.includes(sport) ? "" : "display:none"}"><span>Target pace <span class="faint" style="font-weight:400">optional · m:ss / ${BOOT.dist_unit}</span></span>
         <input id="liveTargetPace" placeholder="${fmtPace(defPace)}" value="${fmtPace(defPace)}"></label>
+      <label class="field" style="margin-top:10px"><span>Auto-pause</span><span class="row" style="gap:8px"><input type="checkbox" id="liveAutoPause" ${store.get("autoPause", true) ? "checked" : ""}> Stop the clock when you stop moving</span></label>
       <div class="small muted" style="margin:6px 0 16px">Leave pace blank to track without alerts. Needs location access the first time.</div>
       <button class="btn primary" id="liveStartBtn" style="width:100%">${I("play")}Start</button>
     </div></div></div>`;
@@ -8005,13 +8056,16 @@
           LIVE.sport = chosen;
           LIVE.unit = BOOT.dist_unit;
           LIVE.target = target;
+          LIVE.autoPause = $("#liveAutoPause").checked;
+          LIVE.autoPaused = false;
           LIVE.paused = false;
           LIVE.elapsed = 0;
           LIVE.dist = 0;
           LIVE.pace = null;
           LIVE.splits = [];
           LIVE.flag = null;
-          await LiveWorkout.start(chosen, LIVE.unit, target);
+          store.set("autoPause", LIVE.autoPause);
+          await LiveWorkout.start(chosen, LIVE.unit, target, LIVE.autoPause);
           LIVE.state = "active";
           render();
         };
@@ -11107,8 +11161,10 @@
               date: BOOT.today,
               start: localIso(r.start),
               dur_s: r.dur_s,
+              elapsed_s: r.elapsed_s,
               dist_km: r.dist_km,
               splits: r.splits,
+              track: r.track,
             });
             LIVE.state = "setup";
             if (!res.ok) return toast("Could not save", res.error, "bad");
@@ -11144,6 +11200,7 @@
       <label class="field"><span>Target pace <span class="faint" style="font-weight:400">optional · m:ss / ${BOOT.dist_unit}</span></span>
         <input id="liveTargetPace" inputmode="numeric" placeholder="${fmtPace(defPace)}" value="${fmtPace(defPace)}"></label>
       <div class="small muted" style="margin-top:8px">Leave it blank to track without alerts. You get a buzz if you drift off pace.</div></div></div>
+    <div class="mcard" style="margin-top:12px"><div class="p"><label class="field"><span>Auto-pause</span><span class="row" style="gap:8px"><input type="checkbox" id="liveAutoPause" ${store.get("autoPause", true) ? "checked" : ""}> Stop the clock when you stop moving</span></label></div></div>
     <div class="small muted" style="margin:12px 2px 0">${I("info")} Needs location access the first time.</div>
     <button class="mlv-start" id="liveStartBtn">${I("play")}Start</button>
   </div>`;
@@ -11162,13 +11219,16 @@
           LIVE.sport = chosen;
           LIVE.unit = BOOT.dist_unit;
           LIVE.target = target;
+          LIVE.autoPause = $("#liveAutoPause").checked;
+          LIVE.autoPaused = false;
           LIVE.paused = false;
           LIVE.elapsed = 0;
           LIVE.dist = 0;
           LIVE.pace = null;
           LIVE.splits = [];
           LIVE.flag = null;
-          await LiveWorkout.start(chosen, LIVE.unit, target);
+          store.set("autoPause", LIVE.autoPause);
+          await LiveWorkout.start(chosen, LIVE.unit, target, LIVE.autoPause);
           LIVE.state = "active";
           render();
         };

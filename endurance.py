@@ -1664,6 +1664,31 @@ def ftp_equivalent(watts, dur_s):
     return watts / min(1.05, max(0.25, (max(dur_s, 300) / 3600) ** -0.16))
 
 
+TRACK_POINTS = 240  # downsample target: plenty for a profile chart, light enough to sync and export
+
+
+def downsample_track(points, target=TRACK_POINTS):
+    """Thin a raw GPS track to ~`target` evenly-spaced points, keeping the first and last.
+
+    Each point is {t_s, dist_m, ele_m} (ele_m optional). The raw stream from a GPS sensor is one fix per
+    second or so - fine for live ticking, far more than a post-hoc profile chart needs, and this database
+    syncs between devices and exports to a file, so it isn't stored as-is.
+    """
+    pts = [p for p in points if p.get("dist_m") is not None]
+    if len(pts) <= target:
+        return pts
+    step = (len(pts) - 1) / (target - 1)
+    idx = sorted({round(i * step) for i in range(target)})
+    return [pts[i] for i in idx]
+
+
+def workout_track(w):
+    """Parsed GPS samples for a workout row, or None. The single seam later features (power/HR decoupling,
+    a best-efforts curve) should read a workout's track through, rather than touching workouts.track directly."""
+    raw = w["track"] if w is not None else None
+    return json.loads(raw) if raw else None
+
+
 def _best_window(splits, km):
     """Fastest contiguous block of splits covering `km`, scaled to exactly `km`. None if no block fits.
 
@@ -3813,6 +3838,8 @@ def open_db(path=DB_PATH):
         ("indoor", "INTEGER DEFAULT 0"),
         ("splits", "TEXT"),
         ("gear_id", "INTEGER"),
+        ("track", "TEXT"),  # downsampled GPS profile (dist/time/elevation), set only by live GPS sessions
+        ("elapsed_s", "REAL"),  # wall-clock time for a live session, when auto-pause makes it differ from dur_s
     ):
         if col not in [c[1] for c in db.execute("PRAGMA table_info(workouts)")]:
             db.execute(f"ALTER TABLE workouts ADD COLUMN {col} {typ}")
@@ -4296,6 +4323,7 @@ class Api:
             kcal=_f(w["kcal"]),
             notes=w["notes"] or "",
             splits=splits,
+            has_track=bool(w["track"]),
             edit=dict(
                 date=w["date"],
                 sport=s,
@@ -4687,15 +4715,22 @@ class Api:
     @_locked
     def save_live_workout(self, f):
         """Finish of the phone's live-tracking screen: dur_s/dist_km/avg_hr/splits already computed natively
-        (GPS + HealthKit), unlike save_workout's hand-typed h/m/s form."""
+        (GPS + HealthKit), unlike save_workout's hand-typed h/m/s form. dur_s is moving time (what pace/TSS
+        should use); elapsed_s is the wall clock including any auto-paused stretches, and is only ever >=
+        dur_s - it's kept purely as a record, never fed into training-load math."""
         sport = f.get("sport") or "Run"
         date = dt.date.fromisoformat(f.get("date") or dt.date.today().isoformat()).isoformat()
         dur, dist, hr = float(f.get("dur_s") or 0), float(f.get("dist_km") or 0), f.get("avg_hr")
+        w = float(f["avg_w"]) if str(f.get("avg_w") or "").strip() else None
         if dur <= 0:
             return dict(ok=False, error="No recorded time")
-        tss = estimate_tss(P, sport, dur, dist, None, hr, None)
-        kcal = estimate_kcal(P, sport, dur, dist, None, tss)
+        elapsed = float(f["elapsed_s"]) if str(f.get("elapsed_s") or "").strip() else None
+        if elapsed is not None and elapsed < dur:
+            elapsed = dur
+        tss = estimate_tss(P, sport, dur, dist, None, hr, w)
+        kcal = estimate_kcal(P, sport, dur, dist, w, tss)
         splits = json.dumps(f["splits"]) if f.get("splits") else None
+        track = json.dumps(downsample_track(f["track"])) if f.get("track") else None
         indoor = 1 if f.get("indoor") not in (None, "", False, "false", "0") else 0
         gear_id = self._resolve_gear_id(sport, f.get("gear_id"))
         try:  # the native side stamps UTC ("...Z"); everything downstream compares against naive local times
@@ -4704,7 +4739,7 @@ class Api:
             start = None
         self._db.execute(
             "INSERT INTO workouts(date,start,sport,dur_s,dist_km,rpe,avg_hr,avg_w,tss,kcal,notes,indoor,splits"
-            ",gear_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ",gear_id,track,elapsed_s) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 date,
                 start,
@@ -4713,19 +4748,59 @@ class Api:
                 dist,
                 None,
                 hr,
-                None,
+                w,
                 tss,
                 kcal,
                 (f.get("notes") or "").strip(),
                 indoor,
                 splits,
                 gear_id,
+                track,
+                elapsed,
             ),
         )
         if self._wx and not indoor:
             self._stamp_weather()
         self._db.commit()
         return dict(ok=True)
+
+    @_locked
+    def workout_profile(self, id):
+        """Pace (or speed, for Bike) and elevation against distance, for the profile chart - built from the
+        stored GPS track via workout_track, the shared accessor other features should use too."""
+        w = self._db.execute("SELECT * FROM workouts WHERE id=?", (int(id),)).fetchone()
+        track = workout_track(w) if w else None
+        if not track or len(track) < 2:
+            return None
+        sport = w["sport"]
+        scale = LIN["dist"][0] if imp() else 1
+        have_ele = any(p.get("ele_m") is not None for p in track)
+        labels = [round(p["dist_m"] / 1000 * scale, 3) for p in track]
+        elev = (
+            [round(p["ele_m"] * (LIN["elev"][0] if imp() else 1), 1) if p.get("ele_m") is not None else None
+             for p in track]
+            if have_ele
+            else None
+        )
+        pace = [None]
+        for prev, cur in zip(track, track[1:]):
+            dd = (cur["dist_m"] - prev["dist_m"]) / 1000
+            dtm = cur["t_s"] - prev["t_s"]
+            if dtm <= 0 or dd <= 0:
+                pace.append(None)
+            elif sport == "Bike":
+                pace.append(round((dd / (dtm / 3600)) * scale, 1))
+            else:
+                pace.append(round((dtm / dd) * (KM_MI if imp() else 1), 1))
+        return dict(
+            labels=labels,
+            pace=pace,
+            elev=elev,
+            dist_unit=unit("dist"),
+            pace_label="Speed" if sport == "Bike" else "Pace",
+            pace_unit=unit("dist") + "/h" if sport == "Bike" else "/" + unit("dist"),
+            elev_unit=unit("elev"),
+        )
 
     @_locked
     def delete_workouts(self, ids):
