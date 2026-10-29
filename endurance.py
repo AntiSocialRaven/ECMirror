@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import sqlite3
+import struct
 import sys
 import threading
 import time
@@ -3604,10 +3605,231 @@ def _sport_from(s):
     return "Other"
 
 
-def parse_activity(path):
-    """TCX or GPX -> dict(date, sport, dur_s, dist_km, avg_hr, avg_w). FIT: export as TCX from Garmin Connect/Strava."""
-    root = ET.parse(path).getroot()
+FIT_EPOCH = 631065600  # FIT timestamps count seconds from 1989-12-31 00:00:00 UTC, not the Unix epoch
+
+# FIT base_type byte -> (struct format char, "invalid" sentinel). A field holding its type's sentinel value
+# (0xFF, 0xFFFFFFFF, ...) means the device recorded nothing, not a real zero/max reading - must become None.
+_FIT_BASE_TYPES = {
+    0x00: ("B", 0xFF),
+    0x01: ("b", 0x7F),
+    0x02: ("B", 0xFF),
+    0x83: ("h", 0x7FFF),
+    0x84: ("H", 0xFFFF),
+    0x85: ("i", 0x7FFFFFFF),
+    0x86: ("I", 0xFFFFFFFF),
+    0x88: ("f", None),
+    0x89: ("d", None),
+    0x0A: ("B", 0xFF),
+    0x8B: ("H", 0xFFFF),
+    0x8C: ("I", 0xFFFFFFFF),
+    0x0D: ("B", 0xFF),
+    0x8E: ("q", 0x7FFFFFFFFFFFFFFF),
+    0x8F: ("Q", 0xFFFFFFFFFFFFFFFF),
+    0x90: ("Q", 0),
+}
+
+# Garmin's nibble-wise CRC-16 (poly 0xA001, reflected). Same table and algorithm run both ways: to validate a
+# real file here, and to stamp a correct trailing CRC on the fixtures the self-test builds by hand.
+_FIT_CRC_TABLE = (
+    0x0000, 0xCC01, 0xD801, 0x1400, 0xF001, 0x3C00, 0x2800, 0xE401,
+    0xA001, 0x6C00, 0x7800, 0xB401, 0x5000, 0x9C01, 0x8801, 0x4400,
+)
+
+
+def _fit_crc(data):
+    crc = 0
+    for byte in data:
+        for nibble in (byte & 0xF, (byte >> 4) & 0xF):
+            tmp = _FIT_CRC_TABLE[crc & 0xF]
+            crc = (crc >> 4) & 0x0FFF
+            crc ^= tmp ^ _FIT_CRC_TABLE[nibble]
+    return crc & 0xFFFF
+
+
+# FIT's numeric sport enum -> a word _sport_from() already knows how to bucket; unlisted sports fall through
+# to "Other", which is fine - we only need enough of the enum to cover what Garmin/Wahoo actually write.
+_FIT_SPORTS = {
+    1: "running", 2: "cycling", 5: "swimming", 11: "walking", 12: "skiing", 13: "skiing",
+    15: "rowing", 17: "hiking", 19: "paddling", 29: "paddling", 21: "cycling",
+}
+
+
+def _fit_messages(data):
+    """Yield (global_mesg_num, {field_num: value}) for every data message in a FIT file.
+
+    FIT is self-describing: a 'definition' message declares a local message type's byte layout (field
+    numbers, sizes, base types, endianness) and every later 'data' message using that local number must be
+    decoded against the most recent matching definition - there's no way to read the data without this."""
+    if len(data) < 12 or data[8:12] != b".FIT":
+        raise ValueError("not a FIT file")
+    hdr_size = data[0]
+    if hdr_size not in (12, 14):
+        raise ValueError("not a FIT file")
+    data_size = struct.unpack_from("<I", data, 4)[0]
+    end = hdr_size + data_size
+    if end + 2 > len(data):
+        raise ValueError("truncated FIT file")
+    crc = struct.unpack_from("<H", data, end)[0]
+    if crc and _fit_crc(data[:end]) != crc:  # some devices write 0 meaning "not computed" - not an error
+        raise ValueError("FIT file failed its checksum (corrupt or truncated)")
+    local_defs = {}
+    last_ts = None
+    pos = hdr_size
+    while pos < end:
+        header = data[pos]
+        pos += 1
+        if header & 0x80:  # compressed-timestamp header: always a data message, local type in 2 bits
+            local_num = (header >> 5) & 0x3
+            if last_ts is None:
+                raise ValueError("FIT file uses a compressed timestamp before any real one")
+            offset = header & 0x1F
+            new_ts = (last_ts & ~0x1F) + offset
+            last_ts = new_ts if new_ts >= last_ts else new_ts + 0x20  # the 5-bit counter wrapped around
+            is_def, local_ts = False, last_ts
+        else:
+            local_num = header & 0xF
+            is_def = bool(header & 0x40)
+            local_ts = None
+        if is_def:
+            if pos + 5 > end:
+                raise ValueError("truncated FIT file")
+            arch = data[pos + 1]
+            endian = ">" if arch == 1 else "<"
+            global_num = struct.unpack_from(endian + "H", data, pos + 2)[0]
+            n_fields = data[pos + 4]
+            pos += 5
+            fields = []
+            for _ in range(n_fields):
+                if pos + 3 > end:
+                    raise ValueError("truncated FIT file")
+                fields.append(tuple(data[pos : pos + 3]))
+                pos += 3
+            dev_size = 0
+            if header & 0x20:  # developer fields: layout is per-file metadata we don't load, so just skip the bytes
+                if pos + 1 > end:
+                    raise ValueError("truncated FIT file")
+                n_dev = data[pos]
+                pos += 1
+                for _ in range(n_dev):
+                    if pos + 3 > end:
+                        raise ValueError("truncated FIT file")
+                    dev_size += data[pos + 1]
+                    pos += 3
+            local_defs[local_num] = dict(endian=endian, global_num=global_num, fields=fields, dev_size=dev_size)
+            continue
+        defn = local_defs.get(local_num)
+        if defn is None:
+            raise ValueError("FIT data message had no matching definition")
+        msg = {}
+        for field_num, size, base in defn["fields"]:
+            if pos + size > end:
+                raise ValueError("truncated FIT file")
+            raw = bytes(data[pos : pos + size])
+            pos += size
+            if base == 0x07:  # string: absent is an empty/missing value, not a numeric sentinel
+                msg[field_num] = raw.split(b"\x00", 1)[0].decode("ascii", "replace") or None
+                continue
+            fmt, invalid = _FIT_BASE_TYPES.get(base, ("B", 0xFF))
+            elem = struct.calcsize(fmt)
+            count = len(raw) // elem if elem else 0
+            if count < 1:
+                continue
+            val = struct.unpack(defn["endian"] + fmt * count, raw[: count * elem])[0]  # scalar fields only
+            msg[field_num] = None if (invalid is not None and val == invalid) else val
+        pos += defn["dev_size"]
+        if msg.get(253) is not None:
+            last_ts = msg[253]
+        elif local_ts is not None:
+            msg[253] = local_ts
+        yield defn["global_num"], msg
+
+
+def _fit_time(fit_ts):
+    return dt.datetime.fromtimestamp(fit_ts + FIT_EPOCH, tz=dt.timezone.utc).isoformat()
+
+
+def _sum_fit_laps(laps):
+    """No session message (rare) - fall back to the lap totals, summed; sport/start come from the first lap."""
+    out = dict(laps[0])
+    for num in (7, 8, 9):  # total_elapsed_time, total_timer_time, total_distance
+        out[num] = sum(l.get(num) or 0 for l in laps)
+    return out
+
+
+def _parse_fit(path):
+    """A Garmin/Wahoo .fit activity file -> (sport, start, dur_s, dist_km, hrs, watts), the same ingredients
+    the TCX/GPX branches of parse_activity build. Record-message lat/lon (semicircles -> degrees, same as a
+    GPX trackpoint) are decoded only as a fallback for files missing session/lap totals."""
+    with open(path, "rb") as fh:
+        data = fh.read()
+    file_type, session, laps, pts = None, {}, [], []
     hrs, watts = [], []
+    for global_num, msg in _fit_messages(data):
+        if global_num == 0:  # file_id
+            file_type = msg.get(0)
+        elif global_num == 18:  # session
+            session = msg
+        elif global_num == 19:  # lap
+            laps.append(msg)
+        elif global_num == 20:  # record
+            if msg.get(3) is not None:
+                hrs.append(msg[3])
+            if msg.get(7) is not None:
+                watts.append(msg[7])
+            lat, lon, ts = msg.get(0), msg.get(1), msg.get(253)
+            if lat is not None and lon is not None and ts is not None:
+                pts.append((lat * 180 / 2**31, lon * 180 / 2**31, ts))
+    if file_type is not None and file_type != 4:
+        raise ValueError(f"not an activity FIT file (file_id.type={file_type})")
+    totals = session or (_sum_fit_laps(laps) if laps else {})
+    if not totals and len(pts) < 2:
+        raise ValueError("FIT file has no session, lap or track data")
+    dur = totals.get(8) or totals.get(7)  # total_timer_time, else total_elapsed_time; both scale 1000
+    dist_m = totals.get(9)  # total_distance, scale 100 (hundredths of a metre)
+    start_s = totals.get(2)  # start_time
+    if dur is not None:
+        dur = dur / 1000
+    elif len(pts) >= 2:
+        dur = pts[-1][2] - pts[0][2]
+    else:
+        raise ValueError("FIT file has no duration")
+    if dist_m is not None:
+        dist = dist_m / 100000
+    elif len(pts) >= 2:
+        dist = sum(_haversine(pts[i][:2], pts[i + 1][:2]) for i in range(len(pts) - 1))
+    else:
+        dist = 0.0
+    if start_s is not None:
+        start = _fit_time(start_s)
+    elif pts:
+        start = _fit_time(pts[0][2])
+    else:
+        start = None
+    sport = _sport_from(_FIT_SPORTS.get(totals.get(5), ""))
+    if not hrs and session.get(16) is not None:  # no per-sample records: fall back to the session average
+        hrs = [session[16]]
+    if not watts and session.get(20) is not None:
+        watts = [session[20]]
+    return sport, start, dur, dist, hrs, watts
+
+
+def parse_activity(path):
+    """FIT, TCX or GPX -> dict(date, sport, dur_s, dist_km, avg_hr, avg_w)."""
+    hrs, watts = [], []
+    if path.lower().endswith(".fit"):
+        sport, start, dur, dist, hrs, watts = _parse_fit(path)
+        local = _local(dt.datetime.fromisoformat(start.strip())) if start else None
+        return dict(
+            date=(local.date() if local else dt.date.today()).isoformat(),
+            start=_stamp(local),
+            sport=sport,
+            dur_s=dur,
+            dist_km=dist,
+            avg_hr=sum(hrs) / len(hrs) if hrs else None,
+            avg_w=sum(watts) / len(watts) if watts else None,
+            notes="Imported: " + os.path.basename(path),
+        )
+    root = ET.parse(path).getroot()
     if path.lower().endswith(".tcx"):
         act = next(e for e in root.iter() if _tag(e) == "Activity")
         dur = dist = 0.0
@@ -4842,7 +5064,7 @@ class Api:
         paths = self._window.create_file_dialog(
             webview.FileDialog.OPEN,
             allow_multiple=True,
-            file_types=("Activity files (*.csv;*.tcx;*.gpx)", "Strava export (*.csv)", "All files (*.*)"),
+            file_types=("Activity files (*.csv;*.tcx;*.gpx;*.fit)", "Strava export (*.csv)", "All files (*.*)"),
         )
         with self._lock:
             return dict(self._import_paths(paths or []), cancelled=not paths)
@@ -4951,12 +5173,10 @@ class Api:
 
     @_locked
     def watchfolder_scan(self):
-        """Pick up new .gpx/.tcx/.csv files a watch-sync tool dropped in the watched folder. There's no separate
-        "already seen" ledger: every file in the folder is re-parsed on each scan and handed to the same
+        """Pick up new .fit/.gpx/.tcx/.csv files a watch-sync tool dropped in the watched folder. There's no
+        separate "already seen" ledger: every file in the folder is re-parsed on each scan and handed to the same
         is_duplicate check manual import uses, so a file imported last time is silently skipped, not re-added.
-        That trades a little repeated parsing for one duplicate mechanism instead of two.
-        .fit isn't a format parse_activity reads (see its docstring: export TCX from Garmin Connect/Strava
-        instead), so .fit files are counted and reported rather than silently ignored."""
+        That trades a little repeated parsing for one duplicate mechanism instead of two."""
         path = P["watchfolder_path"]
         if not P["watchfolder_on"] or not path:
             return dict(ok=0, skipped=0, dups=[], bad=[], disabled=True)
@@ -4964,13 +5184,8 @@ class Api:
             names = os.listdir(path)
         except OSError as e:
             return dict(ok=0, skipped=0, dups=[], bad=[f"Watch folder unavailable: {e.strerror or e}"], disabled=False)
-        paths = [os.path.join(path, n) for n in names if n.lower().endswith((".gpx", ".tcx", ".csv"))]
-        n_fit = sum(1 for n in names if n.lower().endswith(".fit"))
+        paths = [os.path.join(path, n) for n in names if n.lower().endswith((".fit", ".gpx", ".tcx", ".csv"))]
         result = self._import_paths(paths)
-        if n_fit:
-            result["bad"] = result["bad"] + [
-                f"{n_fit} .fit file(s) skipped — export as TCX from Garmin Connect/Strava"
-            ]
         P["watchfolder_last"] = dt.datetime.now().isoformat(timespec="seconds")
         self._save()
         return dict(result, disabled=False)
@@ -6661,14 +6876,21 @@ class Api:
     # ---- file transfer without native dialogs (phone)
     @_locked
     def import_texts(self, files):
+        """files: [{name, text}] for GPX/TCX/CSV, or [{name, data}] with base64 bytes for a binary .fit -
+        the phone has no filesystem path to hand us, so it ships either the text or the encoded bytes."""
+        import base64
         import tempfile
 
         folder = tempfile.mkdtemp()
         paths = []
         for f in files:
             path = os.path.join(folder, os.path.basename(f["name"]))
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(f["text"])
+            if "data" in f:
+                with open(path, "wb") as fh:
+                    fh.write(base64.b64decode(f["data"]))
+            else:
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(f["text"])
             paths.append(path)
         return self._import_paths(paths)
 

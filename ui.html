@@ -7187,7 +7187,7 @@
       }
 
       const emptyLog = () =>
-        `<div class="empty">${I("list")}<b>No workouts yet</b>Log your first session, or import your Strava export (activities.csv) or TCX/GPX files.<div style="margin-top:12px"><button class="btn primary" onclick="openWorkout()">${I("plus")}Log workout</button></div></div>`;
+        `<div class="empty">${I("list")}<b>No workouts yet</b>Log your first session, or import your Strava export (activities.csv) or FIT/TCX/GPX files.<div style="margin-top:12px"><button class="btn primary" onclick="openWorkout()">${I("plus")}Log workout</button></div></div>`;
       function workoutTable(rows, selectable, sortKey, sortDir) {
         if (MOBILE)
           return `<div class="wlist">${rows
@@ -7236,7 +7236,7 @@
       <div class="row wrap"><div class="search">${I("search")}<input class="input" id="q" placeholder="Search notes, dates…" value="${esc(LOG.q)}" style="width:210px"></div>
         <div class="seg" id="filt">${["All", ...d.sports].map((s) => `<button class="${LOG.filter === s ? "on" : ""}" data-f="${s}">${s !== "All" ? `<i class="dot" style="--c:${col(s)}"></i>` : ""}${s}</button>`).join("")}</div></div>
       <div class="row"><button class="btn danger" id="bulkDel" style="display:none">${I("trash")}<span></span></button>
-        <button class="btn" onclick="importFiles()" title="Strava activities.csv, TCX or GPX. Duplicates are skipped automatically.">${I("up")}Import</button><button class="btn" onclick="exportCsv()">${I("down")}Export CSV</button>
+        <button class="btn" onclick="importFiles()" title="Strava activities.csv, FIT, TCX or GPX. Duplicates are skipped automatically.">${I("up")}Import</button><button class="btn" onclick="exportCsv()">${I("down")}Export CSV</button>
         <button class="btn primary desktop-only" onclick="openWorkout()">${I("plus")}New workout</button></div>
     </div>
     <div id="logTable" style="max-height:calc(100vh - 330px);overflow:auto"></div>
@@ -9653,7 +9653,7 @@
         el.innerHTML = `<div class="card-h"><div><h3>${I("folder")} Watch folder</h3><div class="sub">Garmin Express, the Wahoo app and most watch software drop .fit/.tcx/.gpx files into a folder on this computer. Point at it once and new activities import on their own. Desktop-only: the phone can't watch a folder on this computer.</div></div></div>
     <div class="card-b">${
       st.on && st.path
-        ? `<div class="row wrap"><div class="grow small muted"><code>${esc(st.path)}</code><br>${st.last ? "Last scanned " + new Date(st.last).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "Not scanned yet"}. .fit files can't be read directly — export as TCX from Garmin Connect/Strava.</div>
+        ? `<div class="row wrap"><div class="grow small muted"><code>${esc(st.path)}</code><br>${st.last ? "Last scanned " + new Date(st.last).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "Not scanned yet"}. Reads .fit, .tcx, .gpx and Strava .csv.</div>
         <button type="button" class="btn primary" id="wfScan">${I("refresh")}Scan now</button><button type="button" class="btn" id="wfChange">Change folder…</button><button type="button" class="btn" id="wfOff">Turn off</button></div>`
         : `<p class="muted" style="margin:0 0 12px">New files are picked up automatically each time you open the app; duplicates of activities you've already logged are skipped.</p>
         <button type="button" class="btn primary" id="wfOn">${I("folder")}Choose folder…</button>`
