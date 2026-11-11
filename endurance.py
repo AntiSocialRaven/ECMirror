@@ -14,12 +14,14 @@ import json
 import math
 import os
 import re
+import secrets
 import shutil
 import sqlite3
 import struct
 import sys
 import threading
 import time
+import uuid
 import xml.etree.ElementTree as ET
 
 # ============================================================================
@@ -161,6 +163,14 @@ CREATE TABLE IF NOT EXISTS scheduled(id INTEGER PRIMARY KEY, uid TEXT, date TEXT
     dur_s REAL, dist_km REAL, notes TEXT);
 CREATE TABLE IF NOT EXISTS gear(id INTEGER PRIMARY KEY, name TEXT, kind TEXT, sports TEXT, purchased TEXT,
     retire_km REAL, active INTEGER DEFAULT 1, is_default INTEGER DEFAULT 0, notes TEXT);
+CREATE TABLE IF NOT EXISTS plan_edits(id INTEGER PRIMARY KEY, uid TEXT, src TEXT, date TEXT, sport TEXT, dur_s REAL,
+    tss REAL, desc TEXT, pinned INTEGER DEFAULT 0, group_info TEXT);
+CREATE TABLE IF NOT EXISTS day_locks(id INTEGER PRIMARY KEY, uid TEXT, date TEXT, kind TEXT, note TEXT);
+CREATE TABLE IF NOT EXISTS session_templates(id INTEGER PRIMARY KEY, uid TEXT, name TEXT, cfg TEXT);
+CREATE TABLE IF NOT EXISTS plan_weeks(id INTEGER PRIMARY KEY, uid TEXT, start TEXT, mode TEXT, budget_h REAL);
+CREATE TABLE IF NOT EXISTS scenarios(id INTEGER PRIMARY KEY, uid TEXT, name TEXT, change TEXT);
+CREATE TABLE IF NOT EXISTS goals(id INTEGER PRIMARY KEY, uid TEXT, kind TEXT, sport TEXT, dist_km REAL,
+    target REAL, start_val REAL, start_date TEXT, by_date TEXT, note TEXT);
 """
 
 DATA_TABLES = (
@@ -174,6 +184,12 @@ DATA_TABLES = (
     "quotes",
     "scheduled",
     "gear",
+    "plan_edits",
+    "day_locks",
+    "session_templates",
+    "plan_weeks",
+    "scenarios",
+    "goals",
 )
 
 GEAR_WARN_PCT = 90  # retire-at warning kicks in this close to the limit; 100+ is past it
@@ -193,6 +209,12 @@ SYNC_TABLES = {
     "quotes": "uid",
     "scheduled": "uid",
     "gear": "uid",
+    "plan_edits": "uid",
+    "day_locks": "uid",
+    "session_templates": "uid",
+    "plan_weeks": "uid",
+    "scenarios": "uid",
+    "goals": "uid",
 }
 
 LOCAL_KEYS = {
@@ -203,6 +225,7 @@ LOCAL_KEYS = {
     "sync_pushed_rev",
     "sync_last",
     "hub_on",
+    "ics_token",
     "hub_code",
     "hub_last",
     "health_on",
@@ -343,8 +366,20 @@ DEFAULTS = dict(
     long_day=6,
     recovery_every=4,
     taper_weeks=0,
+    availability={},
+    build_frac=0.45,
+    peak_weeks=3,
+    week_shape={},
+    recovery_cut=35.0,
+    taper_floor=60.0,
+    race_week_pct=40.0,
+    ramp_style="linear",
+    strength_min=30.0,
+    plan_weeks=12,
     strength=True,
+    auto_adapt=True,
     plan_race="",
+    plan_goal="",
     goal="maintain",
     activity="light",
     protein_gkg=0.0,
@@ -363,6 +398,7 @@ DEFAULTS = dict(
     sync_pushed_rev=0,
     sync_last="",
     hub_on=False,
+    ics_token="",
     hub_code="",
     hub_last="",
     serve_assets=False,
@@ -717,6 +753,190 @@ DESC = {
     },
 }
 
+# A phase's session can be a list: the plan walks it week by week, so a key session advances and rotates instead of
+# repeating. Each list reads as a short block of progression, and a different key starts at a different point.
+VARIANTS = {
+    "run_q": {
+        "Base": [
+            "Hills: 8 x 60 s uphill hard, jog down. Builds strength and economy.",
+            "Fartlek: 10 x (1 min @ {steady}, 1 min easy) after a 15 min warm-up.",
+            "Hills: 10 x 45 s steep uphill hard, jog down. Drive the knees, stay tall.",
+            "Hill sprints: 6 x 12 s all-out uphill with full recovery, then 20 min easy.",
+        ],
+        "Build": [
+            "Threshold: 3 x 8 min @ {thr}, 2 min jog.",
+            "Cruise intervals: 5 x 6 min @ {thr}, 90 s jog.",
+            "Threshold: 4 x 8 min @ {thr}, 2 min jog.",
+            "Threshold: 2 x 15 min @ {thr}, 3 min jog between.",
+            "Progression: 30 min building from {steady} to {thr}, then 10 min easy.",
+        ],
+        "Peak": [
+            "VO2 sharpening: 5 x 3 min @ {vo2p}, 2 min jog.",
+            "Race-pace blocks: 3 x 10 min @ {race_run}, 2 min jog.",
+            "Mixed: 3 x 2 min @ {vo2p}, 3 x 5 min @ {race_run}, easy jog between.",
+            "Race-pace blocks: 2 x 15 min @ {race_run}, 3 min jog.",
+        ],
+    },
+    "run_tempo": {
+        "Base": [
+            "Steady: 20-30 min Z3 @ {steady} inside an easy run.",
+            "Steady: 2 x 15 min @ {steady}, 3 min easy between, inside an easy run.",
+            "Long steady: 35 min @ {steady}, nothing harder.",
+        ],
+        "Build": [
+            "Tempo: 25-35 min continuous @ {thr} to {steady}.",
+            "Tempo intervals: 3 x 12 min @ {steady}, 2 min jog.",
+            "Tempo: 40 min @ {steady} on a flat or rolling route.",
+            "Alternating: 6 x (3 min @ {thr}, 2 min @ {steady}) inside an easy run.",
+        ],
+        "Peak": [
+            "Race-pace run: 2 x 20 min @ {race_run}.",
+            "Race-pace run: 4 x 8 min @ {race_run}, 90 s jog.",
+            "Race-pace run: 30 min @ {race_run} after a 15 min warm-up.",
+        ],
+    },
+    "long_run": {
+        "Base": [
+            "Long run Z2 @ {easy}. Grow it no more than ~10%/week.",
+            "Long run Z2 @ {easy} on a hillier route, walk the steepest parts if needed.",
+            "Long run Z2 @ {easy}, with 4 x 20 s strides in the last 10 minutes.",
+        ],
+        "Build": [
+            "Long run Z2 @ {easy}, last 20 min @ {steady}. Practise fueling.",
+            "Long run with a 3 x 10 min @ {steady} block in the middle, easy between.",
+            "Long run Z2 @ {easy}, last 30 min building to {steady}. Practise fueling.",
+            "Long run, progressive: first half @ {easy}, second half @ {steady}.",
+        ],
+        "Peak": [
+            "Long run with 3 x 15 min @ {race_run}. Rehearse race shoes, kit and gels.",
+            "Long run with 2 x 20 min @ {race_run}, easy between. Rehearse fueling.",
+            "Long run, last 40 min @ {race_run}. Race shoes, kit and gels.",
+        ],
+    },
+    "run_easy": {
+        "Base": [
+            "Easy run Z2 @ {easy}, conversational.",
+            "Easy run Z2 @ {easy} on soft ground if you can. Relax the shoulders.",
+            "Easy run Z2 @ {easy} with 4 x 20 s strides at the end.",
+        ],
+        "Build": [
+            "Easy run Z2 @ {easy}, conversational.",
+            "Easy run Z2 @ {easy}, short and relaxed. It should make tomorrow better.",
+            "Easy run Z2 @ {easy} with 6 x 20 s strides at the end.",
+        ],
+    },
+    "bike_q": {
+        "Base": [
+            "Sweet spot: 3x10 min @ {ssw}, 5 min easy between; rest Z2 {z2w}. Cadence 85-95.",
+            "Sweet spot: 2x20 min @ {ssw}, 5 min easy between.",
+            "Sweet spot: 3x15 min @ {ssw}, 5 min easy between.",
+            "Cadence work: 5 x 5 min @ {ssw} alternating 80 and 100+ rpm, 3 min easy.",
+        ],
+        "Build": [
+            "Threshold: 3x12 min @ {thrw}, 5 min recoveries.",
+            "Threshold: 4x10 min @ {thrw}, 5 min recoveries.",
+            "Over-unders: 3 x (4 min @ {thrw}, 2 min @ {ssw}) x 2, 5 min between sets.",
+            "Threshold: 2x20 min @ {thrw}, 8 min recovery.",
+            "VO2: 5 x 4 min @ {vo2w}, 4 min easy.",
+        ],
+        "Peak": [
+            "Race-specific: 2x20-25 min @ {racew} + 4x3 min @ {vo2w}.",
+            "Race-specific: 3x15 min @ {racew}, 5 min easy, then 3 x 1 min hard.",
+            "Race-specific: 40 min @ {racew} continuous, then 5 min easy and 3x3 min @ {vo2w}.",
+        ],
+    },
+    "bike_mid": {
+        "Base": [
+            "Endurance Z2 @ {z2w} with 3x5 min high cadence (100+).",
+            "Endurance Z2 @ {z2w} with 6 x 1 min tempo bursts @ {tempow}.",
+            "Endurance Z2 @ {z2w}, steady. Practise riding relaxed and aero.",
+        ],
+        "Build": [
+            "Tempo: 2x20 min @ {racew}, race position.",
+            "Tempo: 3x15 min @ {tempow}, 5 min easy.",
+            "Tempo: 45 min @ {tempow} continuous, race position.",
+            "Endurance with 5 x 5 min @ {thrw}, 5 min easy.",
+        ],
+        "Peak": [
+            "Endurance with 3x10 min @ {racew}. Rehearse race fueling.",
+            "Endurance with 2x20 min @ {racew}. Rehearse race fueling.",
+            "Endurance with 4x8 min @ {racew}, race position the whole time.",
+        ],
+    },
+    "long_bike": {
+        "Base": [
+            "Long ride Z2 @ {z2w}. Fuel ~60 g carbs/h. Extend duration gradually.",
+            "Long ride Z2 @ {z2w} on rolling terrain, keep it steady up the climbs. Fuel ~60 g carbs/h.",
+            "Long ride Z2 @ {z2w} with 3 x 10 min @ {tempow} in the second half. Fuel ~60 g carbs/h.",
+        ],
+        "Build": [
+            "Long ride Z2, last 45-60 min @ {racew}.{brick} Fuel {carbs} g carbs/h.",
+            "Long ride Z2 with 3 x 20 min @ {racew}, 10 min easy between.{brick} Fuel {carbs} g carbs/h.",
+            "Long ride Z2, first hour easy, then 90 min @ {tempow}.{brick} Fuel {carbs} g carbs/h.",
+        ],
+        "Peak": [
+            "Race simulation: long ride with 2x45 min @ {racew}.{brick} Full race kit + nutrition.",
+            "Race simulation: long ride, middle 90 min @ {racew}.{brick} Full race kit + nutrition.",
+            "Race simulation: long ride with 3x30 min @ {racew}.{brick} Full race kit + nutrition.",
+        ],
+    },
+    "bike_end": {
+        "Base": [
+            "Endurance ride Z2 @ {z2w}.",
+            "Endurance ride Z2 @ {z2w} with 5 x 30 s high-cadence spin-ups.",
+        ],
+        "Build": [
+            "Endurance ride with 30 min @ tempo {tempow}.",
+            "Endurance ride with 4 x 8 min @ tempo {tempow}, 4 min easy.",
+            "Endurance ride with 3 x 10 min @ tempo {tempow}.",
+        ],
+    },
+    "swim_q": {
+        "Base": [
+            "CSS set: 8-10 x 100 @ {cssp}, 15 s rest.",
+            "CSS set: 6 x 150 @ {cssp}, 20 s rest.",
+            "CSS set: 4 x 200 @ {cssp}, 20 s rest. Hold the stroke count.",
+            "Pyramid: 100-200-300-200-100 @ {cssp}, 20 s rest.",
+        ],
+        "Build": [
+            "CSS set: 3 x (4x200 @ CSS+2s, 20 s rest), 1 min between rounds.",
+            "CSS set: 5 x 300 @ {cssp}, 25 s rest.",
+            "CSS set: 12 x 100 @ CSS-1s, 10 s rest.",
+            "CSS set: 2 x (3 x 400 @ {cssp}), 30 s rest, 2 min between rounds.",
+        ],
+        "Peak": [
+            "Race-pace set: 3 x 400 @ race effort, 45 s rest. Sight every 6-8 strokes.",
+            "Race-pace set: 6 x 200 @ race effort, 30 s rest. Practise sighting.",
+            "Race-pace set: 2 x 600 @ race effort, 60 s rest, then 4 x 50 fast.",
+        ],
+    },
+    "swim_end": {
+        "Base": [
+            "Endurance: 4x400 steady @ {css_easy}, 30 s rest.",
+            "Endurance: 3x500 steady @ {css_easy}, 30 s rest, pull buoy on the last.",
+            "Endurance: 2 x 800 steady @ {css_easy}, 45 s rest.",
+        ],
+        "Build": [
+            "Endurance: 3x600 @ CSS+3s, pull buoy on the last one.",
+            "Endurance: 1500 continuous @ CSS+4s, then 4 x 50 fast.",
+            "Endurance: 6 x 300 @ CSS+3s, 20 s rest.",
+        ],
+    },
+    "swim_long": {
+        "Base": [
+            "Long aerobic swim, continuous or 5x500 @ {css_easy}.",
+            "Long aerobic swim: 3 x 800 @ {css_easy}, 40 s rest.",
+        ],
+        "Build": [
+            "Long swim: 2 x 1000 @ CSS+4s, 1 min rest.",
+            "Long swim: 2000 continuous @ CSS+5s, sight every 8 strokes.",
+            "Long swim: 3 x 800 @ CSS+3s, 40 s rest.",
+        ],
+    },
+}
+for _k, _phases in VARIANTS.items():
+    DESC[_k].update(_phases)
+
 RACE_WEEK_DESC = {
     "Swim": "Short swim with 4 x 100 at race effort. Stay loose.",
     "Bike": "Openers: 3 x 3 min at race effort, rest easy.",
@@ -731,6 +951,7 @@ PHASE_FOCUS = {
     "Recovery": "Absorb the training. Easy volume only.",
     "Taper": "Volume down, keep some intensity.",
     "Race week": "Stay fresh, fuel up, execute.",
+    "Checkpoint": "A lighter week, then a test of what the block has built.",
 }
 
 TEAM_TAG = "Team practice"
@@ -1064,12 +1285,22 @@ PROFILE_META = {
     "plan_start": ("Plan start", "date", ""),
     "weekly_hours": ("Current weekly hours", "float", "h"),
     "peak_hours": ("Peak weekly hours", "float", "h"),
-    "days_per_week": ("Training days per week", ("select", [(n, str(n)) for n in range(3, 8)]), ""),
+    "days_per_week": ("Training days per week", ("select", [(n, str(n)) for n in range(1, 8)]), ""),
     "long_day": ("Long-session day", ("select", list(enumerate(DOW))), ""),
-    "recovery_every": ("Recovery week", ("select", [(3, "Every 3rd week"), (4, "Every 4th week"), (0, "None")]), ""),
+    "recovery_every": ("Recovery week every", "float", "weeks · 0 = never"),
+    "recovery_cut": ("Recovery week volume cut", "float", "% less than the week before"),
+    "ramp_style": (
+        "How the weekly hours climb",
+        ("select", [("linear", "Steadily"), ("stepped", "In steps, every 3 weeks"), ("late", "Slow, then steep")]),
+        "",
+    ),
+    "taper_floor": ("Week before the race", "float", "% of peak hours"),
+    "race_week_pct": ("Race week", "float", "% of peak hours"),
+    "strength_min": ("Strength session length", "float", "minutes"),
+    "plan_weeks": ("Plan length with no race", "float", "weeks"),
     "taper_weeks": (
         "Taper length",
-        ("select", [(0, "Auto (by race length)"), (1, "1 week"), (2, "2 weeks"), (3, "3 weeks")]),
+        ("select", [(0, "Auto (by race length)")] + [(n, f"{n} week{'s' * (n > 1)}") for n in range(1, 7)]),
         "",
     ),
     "strength": ("Include strength sessions", "bool", ""),
@@ -1143,13 +1374,6 @@ PROFILE_SECTIONS = [
         [
             "plan_race",
             "plan_start",
-            "weekly_hours",
-            "peak_hours",
-            "days_per_week",
-            "long_day",
-            "recovery_every",
-            "taper_weeks",
-            "strength",
             "train_time",
         ],
     ),
@@ -2507,6 +2731,17 @@ def session_time(p, sess):
     return p.get("team_time", "15:30") if is_team(sess) else p.get("train_time", "07:00")
 
 
+def wx_score(w):
+    """How unpleasant a session window is: heat, rain, wind, storms, cold. Lower is better."""
+    return (
+        (heat_slowdown(w["temp_max"], w["dew"])[0] if w["dew"] is not None else 0)
+        + w["rain"] / 15
+        + max(0, w["wind"] - 25) / 10
+        + (10 if w["code"] >= 95 else 0)
+        + max(0, 5 - w["feels"]) / 3
+    )
+
+
 def best_window(wx, day, dur_s):
     """The most comfortable daylight start (6 AM to 8 PM) for a session: cool, dry, calm, no storms."""
     best = None
@@ -2515,13 +2750,7 @@ def best_window(wx, day, dur_s):
         w = wx_during(wx, start, start + dt.timedelta(seconds=max(dur_s, 1800)))
         if not w or w["dark"]:
             continue
-        score = (
-            (heat_slowdown(w["temp_max"], w["dew"])[0] if w["dew"] is not None else 0)
-            + w["rain"] / 15
-            + max(0, w["wind"] - 25) / 10
-            + (10 if w["code"] >= 95 else 0)
-            + max(0, 5 - w["feels"]) / 3
-        )
+        score = wx_score(w)
         if not best or score < best[0]:
             best = (score, start, w)
     return best
@@ -2695,6 +2924,8 @@ def race_tss(total_s):
 
 
 def pick_target(p, races, today):
+    if p.get("plan_goal"):  # the plan is building toward a goal, not a race
+        return None
     upcoming = [r for r in races if dt.date.fromisoformat(r["date"]) >= today]
     chosen = next((r for r in upcoming if p.get("plan_race") and r.get("uid") == p.get("plan_race")), None)
     return chosen or next((r for r in upcoming if r["priority"] == "A"), None) or (upcoming[0] if upcoming else None)
@@ -2707,19 +2938,571 @@ def taper_weeks(p, total_s):
     return 1 if h < 1.5 else 2 if h < 5 else 3
 
 
-def build_plan(p, races, today=None, ctl=50, issues=None, scheduled=None):
-    """Monday-Sunday weeks from plan start through the target race week (or 12 rolling weeks with no race).
-    Returns (target, [{start, phase, hours, sessions:[(date, sport, dur_s, tss, desc, race_id)]}])."""
-    today = today or dt.date.today()
-    target = pick_target(p, races, today)
-    start = dt.date.fromisoformat(p["plan_start"])
-    tpred = predict(p, target, ctl) if target else None
-    tgt = targets(p, target, tpred)
-    focus = race_focus([l["sport"] for l in target["legs"]] if target else p["sports"])
+LOCK_KINDS = {"off": "Day off", "travel": "Travelling", "busy": "Busy", "event": "Life event"}
+
+
+def sched_uid(ref):
+    """Uid of the athlete-scheduled session a plan ref points at ("s:uid"), else None."""
+    return ref[2:] if isinstance(ref, str) and ref.startswith("s:") else None
+
+
+def is_theirs(ref):
+    """Scheduled ("s:") and edited ("e:") sessions are the athlete's own: trims and day locks leave them alone."""
+    return isinstance(ref, str) and ref[:2] in ("s:", "e:")
+
+
+WEEK_MODES = ("Normal", "Busy", "Holiday", "Illness")
+
+
+def apply_weeks(weeks, cfgs, today):
+    """Per-week modes and hour budgets over the generated sessions. Busy trims the week, Holiday keeps only the easy
+    sessions at reduced length, and a budget drops the least intense sessions (never the longest) then scales to fit.
+    (Illness is handled as a health issue in build_plan, so the return to training is graded.)"""
+    by = {c["start"]: c for c in cfgs}
+    for w in weeks:
+        c = by.get(w["start"].isoformat())
+        if not c or c["mode"] == "Illness":
+            continue
+        live = [s for s in w["sessions"] if s[1] != "Race" and not is_team(s) and not is_theirs(s[5]) and s[0] >= today]
+        mode, f = c["mode"], {"Busy": 0.7, "Holiday": 0.6}.get(c["mode"], 1.0)
+        if mode == "Holiday":
+            for s in [s for s in live if s[2] and s[3] / (s[2] / 3600) > 55]:
+                live.remove(s)
+                w["sessions"].remove(s)
+        for s in live if f < 1 else []:
+            s[2], s[3], s[4] = s[2] * f, s[3] * f, s[4] + f" {mode} week: trimmed."
+        w["target_s"] *= f
+        budget = c["budget_h"]
+        if not budget:
+            continue
+        hours = lambda: sum(s[2] for s in live) / 3600
+        longest = max(live, key=lambda s: s[2], default=None)
+        while hours() > budget * 1.25 and len(live) > 1:
+            gone = min((s for s in live if s is not longest), key=lambda s: s[3] / ((s[2] or 1) / 3600))
+            live.remove(gone)
+            w["sessions"].remove(gone)
+        if hours() > budget:
+            k = budget / hours()
+            for s in live:
+                s[2], s[3], s[4] = s[2] * k, s[3] * k, s[4] + " Trimmed to your hours budget."
+        w["target_s"] = min(w["target_s"], budget * 3600)
+
+
+def ics_text(t):
+    return str(t).replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+
+
+def ics_fold(line):
+    """RFC 5545 line folding: 75 octets a line, continuations start with a space, never inside a character."""
+    out, cur, size = [], "", 0
+    for ch in line:
+        n = len(ch.encode())
+        if size + n > (75 if not out else 74):
+            out.append(cur)
+            cur, size = "", 0
+        cur, size = cur + ch, size + n
+    return "\r\n ".join(out + [cur])
+
+
+def build_ics(events, name="Endurance Coach"):
+    """events: dicts with uid, summary, day (date) and either time (datetime) + dur_s or neither (all-day)."""
+    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Endurance Coach//Plan//EN", "CALSCALE:GREGORIAN"]
+    lines.append("X-WR-CALNAME:" + ics_text(name))
+    for e in events:
+        lines += ["BEGIN:VEVENT", f"UID:{e['uid']}@endurancecoach", f"DTSTAMP:{stamp}", f"LAST-MODIFIED:{stamp}"]
+        if e.get("time"):
+            lines.append(f"DTSTART:{e['time']:%Y%m%dT%H%M%S}")  # floating: it is your clock time wherever you are
+            m = max(1, round((e["dur_s"] or 1800) / 60))
+            lines.append(f"DURATION:PT{m // 60}H{m % 60}M")
+        else:
+            lines += [f"DTSTART;VALUE=DATE:{e['day']:%Y%m%d}", f"DTEND;VALUE=DATE:{e['day'] + ONE:%Y%m%d}"]
+        lines.append("SUMMARY:" + ics_text(e["summary"]))
+        for key, field in (("desc", "DESCRIPTION"), ("where", "LOCATION")):
+            if e.get(key):
+                lines.append(f"{field}:" + ics_text(e[key]))
+        lines.append("END:VEVENT")
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(ics_fold(x) for x in lines) + "\r\n"
+
+
+GOAL_KINDS = ("ftp", "run_thr_pace", "css", "time", "volume")
+GOAL_SPORT = dict(ftp="Bike", run_thr_pace="Run", css="Swim")
+
+
+def goal_title(g):
+    if g["kind"] == "time":
+        return f"{g['sport']} {leg_dist_ui(g['sport'], g['dist_km'])} {'km' if not imp() else 'mi'} in"
+    names = {"ftp": "Raise FTP to", "run_thr_pace": "Run threshold pace of", "css": "Swim CSS of", "volume": "Train"}
+    return names[g["kind"]]
+
+
+def goal_fmt(g, v):
+    k = g["kind"]
+    if v is None:
+        return "–"
+    return {
+        "ftp": f"{v:.0f} W",
+        "run_thr_pace": fd("pace", v),
+        "css": fd("swim", v),
+        "volume": f"{v:.1f} h/week",
+    }.get(k) or hms(v)
+
+
+def goal_progress(g, cur, today):
+    """Where a goal stands and, only when there is a rate worth reading, when it lands. Same rule as the rank
+    projection: too little history or no movement toward it says so instead of guessing a date."""
+    start, tgt = g["start_val"], g["target"]
+    if cur is None:
+        return dict(pct=0, reached=False, note="There isn't enough data to model this yet.")
+    span = tgt - start
+    reached = cur >= tgt if span > 0 else cur <= tgt
+    pct = 100 if reached else 0 if not span else max(0, min(100, (cur - start) / span * 100))
+    days = (today - dt.date.fromisoformat(g["start_date"])).days
+    if reached:
+        note = "Reached."
+    elif days < 14:
+        note = "Too early to project: it takes two weeks of change to read a rate."
+    elif (cur - start) * span <= 0:
+        note = "Not moving toward it yet, so there's no date to give."
+    else:
+        eta = today + dt.timedelta(days=(tgt - cur) / ((cur - start) / days))
+        if (eta - today).days > 1825:
+            note = "At this pace it is more than five years out, too far to call."
+        else:
+            late = g["by_date"] and eta.isoformat() > g["by_date"]
+            note = f"At this pace: {eta:%b} {eta.day}, {eta.year}" + (
+                "" if not g["by_date"] else ", after your date." if late else ", in time for your date."
+            )
+    return dict(pct=round(pct), reached=reached, note=note)
+
+
+EDIT_FIELDS = ("date", "sport", "dur_s", "tss", "desc", "pinned", "group_info")
+TUNING_KEYS = (
+    "availability",
+    "build_frac",
+    "peak_weeks",
+    "week_shape",
+    "recovery_every",
+    "recovery_cut",
+    "ramp_style",
+    "taper_weeks",
+    "taper_floor",
+    "race_week_pct",
+    "strength_min",
+    "plan_weeks",
+    "weekly_hours",
+    "peak_hours",
+    "strength",
+    "auto_adapt",
+)
+TUNING_RANGES = dict(
+    weekly_hours=(1, 40, "your weekly hours"),
+    peak_hours=(1, 40, "your peak hours"),
+    build_frac=(0.2, 0.8, "the build point"),
+    peak_weeks=(0, 8, "the peak weeks"),
+    recovery_every=(0, 12, "the recovery week"),
+    recovery_cut=(0, 60, "the recovery week drop"),
+    taper_weeks=(0, 6, "the taper length"),
+    taper_floor=(20, 100, "the week before the race"),
+    race_week_pct=(10, 100, "race week volume"),
+    strength_min=(10, 120, "the strength session length"),
+    plan_weeks=(4, 52, "the plan length"),
+)
+
+
+def clean_tuning(f):
+    """The plan-shaping values in `f`, checked and typed, as (values, error). Unknown keys are dropped."""
+    out = {}
+    try:
+        for k, v in f.items():
+            if k not in TUNING_KEYS:
+                continue
+            if k == "availability":
+                out[k] = {}
+                for d, m in (v or {}).items():
+                    if str(m).strip() != "":
+                        m = float(m)
+                        if not 0 <= m <= 600 or int(d) not in range(7):
+                            raise ValueError("Check the minutes (0-600)")
+                        out[k][str(int(d))] = m
+            elif k == "week_shape":
+                if v and not valid_shape(v):
+                    raise ValueError("Pick a role for every day, and leave at least one to train")
+                out[k] = {str(int(d)): r for d, r in v.items()} if v else {}
+            elif k in ("strength", "auto_adapt"):
+                out[k] = bool(v)
+            elif k == "ramp_style":
+                if v not in ("linear", "stepped", "late"):
+                    raise ValueError("Pick how the hours climb")
+                out[k] = v
+            else:
+                lo, hi, what = TUNING_RANGES[k]
+                x = float(v)
+                if not lo <= x <= hi:
+                    raise ValueError(f"Check {what} ({lo:g}-{hi:g})")
+                out[k] = int(x) if k in ("peak_weeks", "recovery_every", "taper_weeks", "plan_weeks") else x
+    except ValueError as e:
+        return None, str(e) if str(e).startswith(("Check", "Pick")) else "Check the plan settings"
+    except (TypeError, AttributeError):
+        return None, "Check the plan settings"
+    return out, None
+
+
+def clean_change(c):
+    """A what-if change cut down to the parts a scenario may hold, or None when it isn't one."""
+    if not isinstance(c, dict):
+        return None
+    try:
+        out = {}
+        for e in (c.get("edits") or [])[:200]:
+            row = {k: e[k] for k in EDIT_FIELDS if k in e}
+            if row.get("date"):
+                dt.date.fromisoformat(row["date"])
+            out.setdefault("edits", []).append(dict(row, ref=str(e.get("ref") or "")))
+        for l in (c.get("locks") or [])[:120]:
+            dt.date.fromisoformat(l["date"])
+            if l.get("kind") not in LOCK_KINDS:
+                return None
+            out.setdefault("locks", []).append(dict(date=l["date"], kind=l["kind"]))
+        for d in (c.get("unlock") or [])[:120]:
+            out.setdefault("unlock", []).append(dt.date.fromisoformat(d).isoformat())
+        for w in (c.get("weeks") or [])[:60]:
+            if dt.date.fromisoformat(w["start"]).weekday() != 0 or w.get("mode", "Normal") not in WEEK_MODES:
+                return None
+            b = float(w["budget_h"]) if w.get("budget_h") not in (None, "") else None
+            out.setdefault("weeks", []).append(dict(start=w["start"], mode=w.get("mode", "Normal"), budget_h=b))
+        prof, bad = clean_tuning(c.get("profile") or {})
+        if bad:
+            return None
+        if prof:
+            out["profile"] = prof
+        if c.get("race_date"):
+            out["race_date"] = dt.date.fromisoformat(c["race_date"]).isoformat()
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return None
+    return out or None
+
+
+def change_summary(c):
+    n = lambda k, one, many: f"{len(c[k])} {one if len(c[k]) == 1 else many}" if c.get(k) else None
+    bits = [
+        n("edits", "session change", "session changes"),
+        n("locks", "blocked day", "blocked days"),
+        n("unlock", "day freed", "days freed"),
+        n("weeks", "week setting", "week settings"),
+        "plan tuning" if c.get("profile") else None,
+        f"race on {c['race_date']}" if c.get("race_date") else None,
+    ]
+    return " · ".join(b for b in bits if b)
+
+
+def apply_locks(weeks, locks, today):
+    """A locked day can't hold the plan's own sessions: each moves to the emptiest open day that week, else goes.
+    Days already gone are left alone, and nothing moves onto one."""
+    locked = {l["date"] for l in locks}
+    for w in weeks:
+        days = [w["start"] + ONE * k for k in range(7)]
+        for d in [d for d in days if d.isoformat() in locked and d >= today]:
+            for s in [s for s in w["sessions"] if s[0] == d and s[1] != "Race" and not is_theirs(s[5])]:
+                w["sessions"].remove(s)
+                if is_team(s):
+                    continue
+                load = lambda x: sum(1 for y in w["sessions"] if y[0] == x)
+                free = sorted(  # an empty day first, else the least loaded: the week keeps its training
+                    (x for x in days if x >= today and x.isoformat() not in locked),
+                    key=lambda x: (load(x), abs((x - d).days), x),
+                )
+                if free:
+                    s[0], s[4] = free[0], s[4] + f" Moved off {d:%A}, which you've blocked."
+                    w["sessions"].append(s)
+
+
+def apply_edits(weeks, edits, last_day, alias=None, orphans=None, today=None):
+    """Athlete edits over the generated plan. `src` names the generated session an edit replaces (a missing one is
+    reported in `orphans`, not applied: the plan moved on); no `src` adds a session. Blank fields inherit from the
+    session being replaced. `alias` maps the older date-based refs onto today's."""
+    for e in edits:
+        src = e["src"]
+        old = next((s for w in weeks for s in w["sessions"] if src and s[5] == src), None)
+        if src and not old and alias and src in alias:
+            src = alias[src]
+            old = next((s for w in weeks for s in w["sessions"] if s[5] == src), None)
+        if e["src"] and not old:
+            if orphans is not None and e["date"] and e["date"] >= (today or dt.date.today()).isoformat():
+                orphans.append(e)
+            continue
+        if old:
+            next(w for w in weeks if old in w["sessions"])["sessions"].remove(old)
+        if not e["date"]:
+            continue  # skipped
+        d = dt.date.fromisoformat(e["date"])
+        wk = next((w for w in weeks if w["start"] <= d < w["start"] + 7 * ONE), None)
+        if not wk or d > last_day or any(s[1] == "Race" and s[0] == d for w in weeks for s in w["sessions"]):
+            continue
+        sport = e["sport"] or (old[1] if old else "Run")
+        dur = e["dur_s"] if e["dur_s"] is not None else (old[2] if old else 3600.0)
+        if e["tss"] is not None:
+            tss = e["tss"]
+        elif old:
+            tss = old[3] * dur / old[2] if old[2] else old[3]
+        else:
+            tss = dur / 3600 * 0.65**2 * 100  # an added session with no stated load counts as easy aerobic
+        desc = e["desc"] or (old[4] if old else f"{sport} (added)")
+        wk["sessions"].append([d, sport, dur, tss, desc, "e:" + e["uid"]])
+
+
+def orphan_row(e):
+    """An edit whose generated session is gone, as a line the athlete can read."""
+    bits = (e["src"] or "").split("|")
+    sport = bits[-2] if len(bits) >= 3 else "Session"
+    return dict(uid=e["uid"], date=e["date"], sport=sport)
+
+
+def week_why(w):
+    """What a week is for: the phase's aim, then the key work in it by name."""
+    names = []
+    for s in w["sessions"]:
+        head = s[4].split(":")[0].strip()
+        if is_hard(s) and ":" in s[4][:32] and head not in names and len(head) <= 24:
+            names.append(head)
+    return PHASE_FOCUS[w["phase"]] + (f" Key work: {', '.join(names)}." if names else "")
+
+
+def adapt_for(weeks, rows, today, issues, wcfg):
+    """When the last few finished weeks ran well under plan, how far under (0.6-0.85), else None. Weeks with an
+    injury, illness or a week mode are left out: the plan already bends for those."""
+    cur = today - ONE * today.weekday()
+    past = [w for w in weeks if w["start"] < cur][-3:]
+    if len(past) < 2 or any(w["phase"] in ("Race week", "Checkpoint") for w in past):
+        return None
+    lo, hi = past[0]["start"], past[-1]["start"] + 6 * ONE
+    if any(c["start"] >= lo.isoformat() and c["start"] <= hi.isoformat() and c["mode"] != "Normal" for c in wcfg):
+        return None
+    if any(i["start"] <= hi.isoformat() and (not i["end"] or i["end"] >= lo.isoformat()) for i in issues):
+        return None
+    planned = sum(w["hours"] for w in past)
+    actual = sum(r["dur_s"] or 0 for r in rows if lo.isoformat() <= r["date"] <= hi.isoformat()) / 3600
+    if planned < 4 or actual / planned >= 0.85:
+        return None
+    return dict(
+        factor=max(0.6, actual / planned),
+        actual_h=round(actual / len(past), 1),
+        planned_h=round(planned / len(past), 1),
+        weeks=len(past),
+    )
+
+
+def planned_text(desc):
+    """A session's own description, without the 'Planned:' preamble earlier swaps put in front of it."""
+    return desc.split("Planned: ")[-1]
+
+
+def reshape(s, dur_s, cap=0.85):
+    """The same session in dur_s. Intensity moves to hold the load, but squeezing never goes harder than `cap` (or than
+    the session already was) and stretching never goes softer than easy aerobic (or than it already was)."""
+    hours = s[2] / 3600
+    IF = (s[3] / hours / 100) ** 0.5
+    want = IF * (s[2] / dur_s) ** 0.5
+    IF2 = min(want, max(IF, cap)) if want > IF else max(want, min(IF, 0.55))
+    return dur_s, dur_s / 3600 * IF2 * IF2 * 100
+
+
+def variants_of(s):
+    """Alternatives to a planned session that carry about the same load."""
+    if s[1] in ("Race", "Rest", "Mobility", "Strength") or s[2] <= 0:
+        return []
+    base, out = planned_text(s[4]), []
+    where = {"Bike": "on the trainer", "Run": "on the treadmill"}.get(s[1])
+    if where:
+        out.append(dict(key="indoor", label="Indoors", dur_s=s[2], tss=s[3], desc=f"Indoors, {where}. Planned: {base}"))
+    for key, label, k, word in (
+        ("short", "Shorter and harder", 0.7, "harder"),
+        ("long", "Longer and easier", 1.3, "easier"),
+    ):
+        dur = round(s[2] * k / 300) * 300
+        if dur < 600:
+            continue
+        dur, tss = reshape(s, dur)
+        if abs(tss - s[3]) <= 0.25 * s[3]:  # a session already at its limit can't hold the load this way
+            text = f"{label}: {dur / 60:.0f} min, {word}. Planned: {base}"
+            out.append(dict(key=key, label=label, dur_s=dur, tss=tss, desc=text))
+    return out
+
+
+IV_UNITS = {"m": 1, "yd": 0.9144, "km": 1000, "mi": 1609.344}
+
+
+def secs_of(v):
+    """Seconds from 90, "90" or "1:30"; ValueError for anything else."""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        parts = [float(x) for x in str(v or "0").split(":")]
+        return sum(x * 60**i for i, x in enumerate(reversed(parts)))
+
+
+def template_load(cfg, p):
+    """(seconds, TSS) of a saved interval session: warm-up, reps with rests between, cool-down."""
+    reps = max(1, int(cfg.get("reps") or 1))
+    if cfg.get("by") == "dist":
+        # ponytail: a rep's time comes from threshold pace, so a distance rep is assumed to be run at threshold
+        per_km = {"Run": (p["run_thr_pace"] or 300) * 0.97, "Swim": (p["css"] or 100) * 10, "Row": 240.0}.get(
+            cfg.get("sport"), 100.0
+        )
+        work = float(cfg.get("dist") or 0) * IV_UNITS.get(cfg.get("unit"), 1) / 1000 * per_km
+    else:
+        work = secs_of(cfg.get("work"))
+    rest, edge = secs_of(cfg.get("rest")), (float(cfg.get("warm") or 0) + float(cfg.get("cool") or 0)) * 60
+    total = edge + reps * work + (reps - 1) * rest
+    return total, (edge / 3600 * 0.6**2 + reps * work / 3600 + (reps - 1) * rest / 3600 * 0.5**2) * 100
+
+
+def template_desc(cfg):
+    reps = int(cfg.get("reps") or 1)
+    what = f"{float(cfg.get('dist') or 0):g} {cfg.get('unit')}" if cfg.get("by") == "dist" else cfg.get("work")
+    rest = secs_of(cfg.get("rest"))
+    text = f"{reps} × {what}" + (f", {int(rest // 60)}:{int(rest % 60):02d} rest" if rest and reps > 1 else "")
+    warm, cool = float(cfg.get("warm") or 0), float(cfg.get("cool") or 0)
+    return text + (f", {warm:g} min warm-up" if warm else "") + (f", {cool:g} min cool-down" if cool else "")
+
+
+def is_hard(s):
+    return s[1] not in ("Race", "Rest", "Mobility", "Strength") and bool(s[2]) and s[3] / (s[2] / 3600) > 60
+
+
+def spacing_fixes(weeks, locks, edits, today, limit=2):
+    """Ways to un-bunch hard sessions on back-to-back days: the later one swaps with an easy session (or moves to an
+    empty day) elsewhere in its week, keeping it off a hard day's neighbour. Each fix is a change for apply_change."""
+    locked = {l["date"] for l in locks}
+    pinned = {"e:" + e["uid"] for e in edits if e["pinned"]}
+    out = []
+    for w in weeks:
+        days = [w["start"] + k * ONE for k in range(7)]
+        on = lambda d: [s for s in w["sessions"] if s[0] == d]
+        hard = {d for d in days if any(is_hard(s) for s in on(d))}
+        for d in sorted(hard):
+            if d - ONE not in hard or d < today:
+                continue
+            mover = next((s for s in on(d) if is_hard(s) and isinstance(s[5], str) and s[5] not in pinned), None)
+            if not mover:
+                continue
+            rest_hard = hard - {d}
+            for c in sorted(days, key=lambda x: (abs((x - d).days), x)):
+                if c == d or c < today or c.isoformat() in locked or any(s[1] == "Race" for s in on(c)):
+                    continue
+                if c - ONE in rest_hard or c + ONE in rest_hard or c in rest_hard:
+                    continue
+                swap = next((s for s in on(c) if isinstance(s[5], str) and not is_hard(s) and s[1] != "Race"), None)
+                if on(c) and not swap:
+                    continue
+                edits_ = [dict(ref=mover[5], date=c.isoformat())]
+                if swap:
+                    edits_.append(dict(ref=swap[5], date=d.isoformat()))
+                out.append(
+                    dict(
+                        text=f"{mover[1]} from {d:%a} to {c:%a}" + (f", swapping places with the {swap[1].lower()} session on {c:%a}" if swap else ""),
+                        change=dict(edits=edits_),
+                    )
+                )
+                break
+            if len(out) >= limit:
+                return out
+    return out
+
+
+def plan_warnings(weeks, locks):
+    """{key: text} of things worth a second look in a plan. The key lets the caller report only what a change added."""
+    out, kinds = {}, {l["date"]: LOCK_KINDS.get(l["kind"], "blocked").lower() for l in locks}
+    hard = {s[0] for w in weeks for s in w["sessions"] if is_hard(s)}
+    for d in sorted(hard):
+        if d - ONE in hard:
+            out[f"hard:{d}"] = f"Hard sessions back to back on {d - ONE:%a} and {d:%a}"
+    prev = None
+    for w in weeks:
+        load = sum(s[3] for s in w["sessions"] if s[1] != "Race")
+        if prev and load > prev * 1.1:
+            wk = f"{w['start']:%b} {w['start'].day}"
+            out[f"ramp:{w['start']}"] = f"Week of {wk}: load jumps {load / prev - 1:.0%} on the week before"
+        prev = load
+        for s in w["sessions"]:
+            if s[1] not in ("Race", "Rest") and s[0].isoformat() in kinds:
+                why = kinds[s[0].isoformat()]
+                out[f"lock:{s[0]}:{s[1]}"] = f"{s[1]} on {s[0]:%a} {s[0].day}, a day you marked as {why}"
+    return out
+
+
+SHAPE_ROLES = ("rest", "easy", "key", "long", "any")
+LONG_KEYS = ("long", "gen_long", "swim_long")
+
+
+def valid_shape(shape):
+    """A week shape as {weekday: role} for all seven days, or None when it isn't one (or leaves no day to train)."""
+    try:
+        roles = {int(k): v for k, v in (shape or {}).items()}
+    except (ValueError, TypeError, AttributeError):
+        return None
+    if set(roles) != set(range(7)) or any(v not in SHAPE_ROLES for v in roles.values()):
+        return None
+    return roles if any(v != "rest" for v in roles.values()) else None
+
+
+def shape_template(tmpl, roles):
+    """Re-lay the week's sessions onto the days the athlete said: each day-bundle of the template goes to a day with
+    the same role (long, key, easy), spill goes to the emptiest day that will take it (surplus easy sessions are dropped), and a day with nothing
+    gets an easy session. The sessions themselves, and their shares of the week, are unchanged."""
+    rest = {wd for wd in range(7) if roles[wd] == "rest"}
+    free = [wd for wd in range(7) if wd not in rest]
+    by_day = {}
+    for t in tmpl:
+        by_day.setdefault(t[0], []).append(t)
+    kind = lambda b: (
+        "long" if any(t[1].startswith(LONG_KEYS) for t in b) else "key" if any(t[4] >= 0.8 for t in b) else "easy"
+    )
+    todo = {k: [by_day[w] for w in sorted(by_day) if kind(by_day[w]) == k] for k in ("long", "key", "easy")}
+    out, used = [], {}
+
+    def put(b, wd):
+        out.extend((wd, *t[1:]) for t in b)
+        used[wd] = used.get(wd, 0) + 1
+
+    spill = []
+    for k in ("long", "key", "easy"):
+        days = [wd for wd in free if roles[wd] == k]
+        for b in todo[k]:
+            if days:
+                put(b, days.pop(0))
+            else:
+                spill.append((k, b))
+    for k, b in spill:
+        if k == "easy":  # fewer days than sessions: the extra easy ones go, and the week's hours spread over the rest
+            continue
+        order = ("any", "easy", "long", "key") if k == "long" else ("any", "key", "easy", "long")
+        put(b, min(free, key=lambda x: (used.get(x, 0), order.index(roles[x]), x)))
+    easy = sorted((t for t in tmpl if kind([t]) == "easy"), key=lambda t: t[3])
+    for wd in free:
+        if not used.get(wd) and easy:
+            out.append((wd, *easy[0][1:]))
+    return out
+
+
+def plan_template(p, sports):
+    """The week's sessions as (weekday, key, sport, share, IF, priority), the days they fall on, the days you can't
+    train, and the long-session day. With no week shape set it is the focus's own rhythm, rotated to your long day."""
+    focus = race_focus(sports)
     main = focus if focus in TEMPLATES else "generic"
     tmpl = [(wd, k, focus if sp == "*" else sp, sh, IF, pr) for wd, k, sp, sh, IF, pr in TEMPLATES[main]]
+    av = {int(k): float(v) for k, v in (p.get("availability") or {}).items() if str(k).isdigit()}
+    noway = {wd for wd, mins in av.items() if mins <= 0}
+    roles = valid_shape(p.get("week_shape"))
+    if roles:
+        roles = {wd: "rest" if wd in noway and len(noway) < 7 else r for wd, r in roles.items()}
+        if any(r != "rest" for r in roles.values()):
+            rest = {wd for wd, r in roles.items() if r == "rest"}
+            longs = [wd for wd, r in roles.items() if r == "long"]
+            return shape_template(tmpl, roles), rest, longs[0] if longs else int(p.get("long_day", 6))
     # rotate so the longest session lands on the athlete's chosen day
-    anchor = max(wd for wd, k, *_ in tmpl if k.startswith(("long", "gen_long", "swim_long")))
+    anchor = max(wd for wd, k, *_ in tmpl if k.startswith(LONG_KEYS))
     rot = (int(p.get("long_day", 6)) - anchor) % 7
     tmpl = [((wd + rot) % 7, *rest) for wd, *rest in tmpl]
     days = sorted(
@@ -2728,6 +3511,99 @@ def build_plan(p, races, today=None, ctl=50, issues=None, scheduled=None):
     )
     keep = set(days[: max(1, int(p.get("days_per_week", 6)))])
     tmpl = [t for t in tmpl if t[0] in keep]
+    off = noway
+    if off and len(off) < 7:  # sessions on a day you can't train go to the emptiest day you can
+        used = lambda wd: sum(1 for t in tmpl if t[0] == wd)
+        near = lambda a, b: min((a - b) % 7, (b - a) % 7)
+        tmpl = [
+            (min((x for x in range(7) if x not in off), key=lambda x: (used(x), near(x, t[0]))), *t[1:])
+            if t[0] in off
+            else t
+            for t in tmpl
+        ]
+    return tmpl, noway, int(p.get("long_day", 6))
+
+
+def derive_shape(p, sports):
+    """The week as roles per weekday, whether or not the athlete has set one: what the plan does now."""
+    tmpl, noway, _ = plan_template(p, sports)
+    roles = {wd: "rest" for wd in range(7)}
+    for wd in sorted({t[0] for t in tmpl}):
+        day = [t for t in tmpl if t[0] == wd]
+        roles[wd] = (
+            "long"
+            if any(t[1].startswith(LONG_KEYS) for t in day)
+            else "key"
+            if any(t[4] >= 0.8 for t in day)
+            else "easy"
+        )
+    return roles
+
+
+def goal_checkpoint(gt):
+    """The test that closes a goal block: (sport, seconds, intensity factor, text), or None when the goal is a
+    weekly-hours one and the week itself is the check."""
+    kind, sport = gt["kind"], gt.get("sport")
+    if kind == "ftp":
+        return (
+            "Bike",
+            4200,
+            0.95,
+            "FTP test: 20 min warm-up with 3 x 1 min fast, 5 min easy, then 20 min all-out and even; your FTP is about "
+            "95% of that average power. Cool down 10 min. Enter the result under Zones & tests.",
+        )
+    if kind == "css":
+        return (
+            "Swim",
+            2700,
+            0.9,
+            "CSS test: long warm-up, then 400 and 200 all-out with 10 min easy between. CSS is the 200 m difference "
+            "over the time difference. Enter the result under Zones & tests.",
+        )
+    if kind == "run_thr_pace":
+        return (
+            "Run",
+            3000,
+            0.95,
+            "Threshold test: 15 min warm-up, then 30 min as hard as you can hold evenly. Your average pace over the "
+            "last 20 min is your threshold pace. Enter the result under Zones & tests.",
+        )
+    if kind == "time" and sport:
+        secs = max(900, min(float(gt.get("target") or 3600) + 1200, 14400))
+        return (
+            sport,
+            secs,
+            0.95,
+            f"Time trial for your goal: {gt['fmt_dist']} all-out and evenly paced after a proper warm-up, "
+            "with your race-day fuelling.",
+        )
+    return None
+
+
+def build_plan(
+    p, races, today=None, ctl=50, issues=None, scheduled=None, edits=None, locks=None, weeks_cfg=None, orphans=None
+):
+    """Monday-Sunday weeks from plan start through the target race week (or 12 rolling weeks with no race).
+    Returns (target, [{start, phase, hours, sessions:[(date, sport, dur_s, tss, desc, ref)]}]).
+    ref: None for a Rest/Mobility the health rules added, a race id (int), "p:..." for a generated session
+    (stable while the plan's shape is), "s:uid" for one the athlete scheduled, "e:uid" for an edit."""
+    today = today or dt.date.today()
+    for c in weeks_cfg or []:  # an illness week is a real illness to the health rules, so the return is graded
+        if c["mode"] == "Illness":
+            end = (dt.date.fromisoformat(c["start"]) + 6 * ONE).isoformat()
+            sick = dict(id=0, kind="Illness", name="Illness week", area="", side="", severity=3, sports=[])
+            issues = (issues or []) + [dict(sick, start=c["start"], end=end, ramp_days=7, notes="")]
+    target = pick_target(p, races, today)
+    start = dt.date.fromisoformat(p["plan_start"])
+    tpred = predict(p, target, ctl) if target else None
+    tgt = targets(p, target, tpred)
+    av = {int(k): float(v) for k, v in (p.get("availability") or {}).items() if str(k).isdigit()}
+    gt, gend = p.get("goal_target"), None
+    tmpl, noway, lday = plan_template(p, [l["sport"] for l in target["legs"]] if target else p["sports"])
+    gs = set(p.get("goal_sports") or ())
+    if gs:  # goals tilt the week toward their sports; the shares are renormalised, so the shift is modest
+        boost = float(p.get("goal_boost") or 1.25)  # more when the plan is built toward one of them
+        tmpl = [(*t[:3], t[3] * (boost if t[2] in gs else 1), *t[4:]) for t in tmpl]
     tot = sum(t[3] for t in tmpl)
     if target:
         race_day = dt.date.fromisoformat(target["date"])
@@ -2736,47 +3612,80 @@ def build_plan(p, races, today=None, ctl=50, issues=None, scheduled=None):
         n = ((race_day - ONE * race_day.weekday()) - week0).days // 7 + 1
         T = min(taper_weeks(p, tpred["total"]), n)
     else:
-        race_day, n, T = None, 12, 0
+        race_day, n, T = None, max(4, min(52, int(p.get("plan_weeks") or 12))), 0
         week0 = start - ONE * start.weekday()
+        if gt:  # building toward a goal: it ends on its date, or after the athlete's chosen number of weeks
+            gend = dt.date.fromisoformat(gt["end"]) if gt.get("end") else week0 + dt.timedelta(weeks=n - 1, days=5)
+            gend = max(gend, week0 + dt.timedelta(weeks=2, days=5))
+            n = ((gend - ONE * gend.weekday()) - week0).days // 7 + 1
+            T = 1
     R = int(p.get("recovery_every", 4))
     build_n = max(1, n - T)
-    weeks = []
+    weeks, seen, tkey = [], {}, {}  # tkey: which rhythm slot a session came from, so its ref ignores the weekday
     for i in range(n):
         ws = week0 + dt.timedelta(weeks=i)
         out = n - i
-        if target and out == 1:
-            phase, hrs = "Race week", p["peak_hours"] * 0.4
-        elif target and out <= T:
-            phase, hrs = "Taper", p["peak_hours"] * (0.6 + 0.1 * (out - 2))
+        ending = bool(target or gend)
+        if ending and out == 1:
+            phase, hrs = ("Race week", p["peak_hours"] * float(p.get("race_week_pct", 40)) / 100) if target else (
+                "Checkpoint",
+                p["peak_hours"] * float(p.get("taper_floor", 60)) / 100,
+            )
+        elif ending and out <= T:
+            phase, hrs = "Taper", p["peak_hours"] * min(1.0, float(p.get("taper_floor", 60)) / 100 + 0.1 * (out - 2))
         else:
             frac = i / max(1, build_n - 1)
-            hrs = p["weekly_hours"] + (p["peak_hours"] - p["weekly_hours"]) * frac
-            phase = "Peak" if target and out <= T + 3 else "Build" if frac >= 0.45 else "Base"
+            style = p.get("ramp_style", "linear")
+            top = (build_n - 1) // 3 * 3  # the week the last step starts
+            lift = (  # how much of the climb from now-hours to peak-hours has happened by this week
+                min(1.0, i // 3 * 3 / top) if style == "stepped" and top else frac**2 if style == "late" else frac
+            )
+            hrs = p["weekly_hours"] + (p["peak_hours"] - p["weekly_hours"]) * lift
+            ad = p.get("adapt")
+            if ad and ws >= today - ONE * today.weekday():  # start from real hours
+                now_i = (today - ONE * today.weekday() - week0).days // 7
+                hrs *= ad["factor"] + (1 - ad["factor"]) * min(1.0, (i - now_i) / max(1, build_n - 1 - now_i))
+            peak, build = int(p.get("peak_weeks", 3)), float(p.get("build_frac", 0.45))
+            phase = "Peak" if ending and out <= T + peak else "Build" if frac >= build else "Base"
             if R and (i + 1) % R == 0 and out > T + 1:
-                phase, hrs = "Recovery", hrs * 0.65
+                phase, hrs = "Recovery", hrs * (1 - float(p.get("recovery_cut", 35)) / 100)
+        seen[phase] = seen.get(phase, -1) + 1  # weeks of this phase so far; a recovery week doesn't reset the block
         sessions = []
         for wd, key, sport, share, IF, _ in tmpl:
             day = ws + dt.timedelta(days=(wd - ws.weekday()) % 7)
             dur = hrs * 3600 * share / tot
+            if av.get(wd):  # a time cap trims the session; the hours are not moved elsewhere
+                dur = min(dur, av[wd] * 60)
             if phase == "Race week":
                 d = RACE_WEEK_DESC.get(sport, RACE_WEEK_DESC["*"])
             else:
-                d = DESC[key].get(phase, DESC[key].get("*", DESC[key].get("Base"))).format(sport=sport, **tgt)
+                dp = "Taper" if phase == "Checkpoint" else phase
+                d = DESC[key].get(dp, DESC[key].get("*", DESC[key].get("Base")))
+                if isinstance(d, list):  # block progress, offset per session so the week's key sessions differ
+                    d = d[(seen[phase] + sum(map(ord, key)) + wd) % len(d)]
+                d = d.format(sport=sport, **tgt)
             sessions.append([day, sport, dur, dur / 3600 * IF * IF * 100, d, None])
+            tkey[id(sessions[-1])] = (key, sessions[-1])  # holding the session keeps its id from being reused
+        sm = max(10.0, float(p.get("strength_min") or 30))
         if p.get("strength") and phase in ("Base", "Build", "Recovery", "Peak"):
             for k, off in enumerate((2, 4)[: 1 if phase in ("Peak", "Recovery") else 2]):
-                day = ws + dt.timedelta(days=((int(p.get("long_day", 6)) + off) - ws.weekday()) % 7)
+                day = ws + dt.timedelta(days=((lday + off) - ws.weekday()) % 7)
+                for _ in range(7 if len(noway) < 7 else 0):  # strength lands on a day you can train too
+                    if day.weekday() not in noway:
+                        break
+                    day += ONE
                 sessions.append(
                     [
                         day,
                         "Strength",
-                        1800,
-                        20.0,
-                        "Strength 30 min: squats, RDLs, split squats, calf raises, core. "
+                        sm * 60,
+                        sm * 20.0 / 30,
+                        f"Strength {sm:g} min: squats, RDLs, split squats, calf raises, core. "
                         + ("Heavy, low reps." if phase == "Build" else "Moderate load, good form."),
                         None,
                     ]
                 )
+                tkey[id(sessions[-1])] = (f"strength{k}", sessions[-1])
         if p.get("team_on") and p.get("team_days"):  # coach-led practice replaces the plan's own sessions on those days
             tdays = {ws + dt.timedelta(days=(int(wd) - ws.weekday()) % 7) for wd in p["team_days"]}
             sessions = [x for x in sessions if x[0] not in tdays]
@@ -2785,7 +3694,7 @@ def build_plan(p, races, today=None, ctl=50, issues=None, scheduled=None):
                 sessions.append(
                     [d, p.get("team_sport") or "Run", mins * 60, mins / 60 * 0.75**2 * 100, team_desc(p), None]
                 )
-        weeks.append(dict(start=ws, phase=phase, sessions=sessions, target_s=hrs * 3600))
+        weeks.append(dict(start=ws, phase=phase, sessions=sessions, target_s=hrs * 3600, step=seen[phase]))
 
     def on(d):
         return [s for w in weeks for s in w["sessions"] if s[0] == d]
@@ -2825,7 +3734,21 @@ def build_plan(p, races, today=None, ctl=50, issues=None, scheduled=None):
             for s in on(race_day - 2 * ONE):
                 s[4] += " Carb load day 1: 8-10 g carbs/kg."
         weeks[-1]["sessions"] = [s for s in weeks[-1]["sessions"] if s[0] <= race_day]
-    first_day, last_day = weeks[0]["start"], (race_day or weeks[-1]["start"] + 6 * ONE)
+    if gend:  # the test that closes a goal block, with an easy day before it
+        drop(gend)
+        around_race(
+            gend - ONE,
+            "Test day tomorrow: keep it light.",
+            (gt.get("sport") or p["sports"][0]),
+            1200,
+            12.0,
+            "Easy 20 min with 3-4 short pickups.",
+        )
+        cp = goal_checkpoint(gt)
+        if cp:
+            add(gend, cp[0], cp[1], cp[1] / 3600 * cp[2] ** 2 * 100, cp[3], None)
+        weeks[-1]["sessions"] = [s for s in weeks[-1]["sessions"] if s[0] <= gend]
+    first_day, last_day = weeks[0]["start"], (race_day or gend or weeks[-1]["start"] + 6 * ONE)
     for r in races:
         d = dt.date.fromisoformat(r["date"])
         if not first_day <= d <= last_day:
@@ -2862,6 +3785,19 @@ def build_plan(p, races, today=None, ctl=50, issues=None, scheduled=None):
             f"{r['name']} ({r['priority']} race). See Races for pacing and fueling.",
             r["id"],
         )
+    count, slot, alias = {}, {}, {}
+    for w in weeks:  # refs come before locks and edits, which find sessions by them
+        for s in w["sessions"]:
+            if s[5] is None:
+                n = count[s[0], s[1]] = count.get((s[0], s[1]), -1) + 1
+                s[5] = f"p:{s[0].isoformat()}|{s[1]}|{n}"
+                tk = tkey.get(id(s))
+                if tk:  # a session of the weekly rhythm is named by its slot in the week, not its day
+                    m = slot[w["start"], tk[0], s[1]] = slot.get((w["start"], tk[0], s[1]), -1) + 1
+                    alias[s[5]] = s[5] = f"p:{w['start'].isoformat()}|{tk[0]}|{s[1]}|{m}"
+    apply_weeks(weeks, weeks_cfg or [], today)
+    apply_locks(weeks, locks or [], today)
+    apply_edits(weeks, edits or [], last_day, alias, orphans, today)
     touched = set()
     for sc in sorted(scheduled or [], key=lambda x: x["date"]):  # the athlete's own sessions win over the plan's
         d = dt.date.fromisoformat(sc["date"])
@@ -2872,7 +3808,7 @@ def build_plan(p, races, today=None, ctl=50, issues=None, scheduled=None):
         IF, dur = SCHED_KINDS[sc["kind"]][0], sched_duration(p, sc) or 3600
         add(d, sc["sport"], dur, dur / 3600 * IF * IF * 100, sched_desc(p, sc), "s:" + sc["uid"])
         wk = next(w for w in weeks if w["start"] <= d < w["start"] + 7 * ONE)
-        mine = lambda x: isinstance(x[5], str) or x[1] == "Race" or is_team(x)
+        mine = lambda x: is_theirs(x[5]) or x[1] == "Race" or is_team(x)
         if sc["kind"] == "Long":  # one long session a week: the plan's own becomes an easy one
             same = [x for x in wk["sessions"] if x[1] == sc["sport"] and x[0] != d and not mine(x) and x[2] >= 3600]
             if same:
@@ -2891,7 +3827,7 @@ def build_plan(p, races, today=None, ctl=50, issues=None, scheduled=None):
     for wk in weeks:  # the week keeps its planned hours: what the athlete added is paid for by trimming the plan's own
         if wk["start"] not in touched:
             continue
-        theirs = lambda x: isinstance(x[5], str) or x[1] == "Race" or is_team(x)
+        theirs = lambda x: is_theirs(x[5]) or x[1] == "Race" or is_team(x)
         mine_s = sum(x[2] for x in wk["sessions"] if theirs(x) and x[1] != "Race")
         ours = [x for x in wk["sessions"] if not theirs(x)]
         own_s = sum(x[2] for x in ours)
@@ -4558,8 +5494,13 @@ def not_done(sessions, rows, day):
 
 
 def sess_ref(s):
-    """A planned session points at a race (int id) or at a session the athlete scheduled ("s:uid")."""
-    return dict(race_id=s[5] if isinstance(s[5], int) else None, sched=s[5][2:] if isinstance(s[5], str) else None)
+    """A planned session points at a race (int id) or at a session the athlete scheduled ("s:uid"); `ref` is its
+    stable name for moving, pinning and skipping."""
+    return dict(
+        race_id=s[5] if isinstance(s[5], int) else None,
+        sched=sched_uid(s[5]),
+        ref=s[5] if isinstance(s[5], str) else None,
+    )
 
 
 def _nice_date(d):
@@ -4645,9 +5586,133 @@ class Api:
     def _scheduled(self):
         return [sched_from_row(r) for r in self._db.execute("SELECT * FROM scheduled ORDER BY date, time")]
 
-    def _plan(self, series=None):
+    def _edits(self):
+        return [dict(r) for r in self._db.execute("SELECT * FROM plan_edits ORDER BY id")]
+
+    def _goals(self):
+        return [dict(r) for r in self._db.execute("SELECT * FROM goals ORDER BY id")]
+
+    def _goal_now(self, g, rows, series):
+        k = g["kind"]
+        if k in GOAL_SPORT:
+            return float(P[k])
+        if k == "volume":
+            cut = (dt.date.today() - dt.timedelta(days=28)).isoformat()
+            return sum(w["dur_s"] or 0 for w in rows if w["date"] >= cut) / 3600 / 4
+        race = dict(legs=[dict(sport=g["sport"], km=g["dist_km"], elev=0.0)], temp_c=15.0)
+        return predict(P, race, series[-1][1])["total"]
+
+    @_locked
+    def goals(self):
+        rows, series, today = self._workouts(), self._series(), dt.date.today()
+        out = []
+        for g in self._goals():
+            cur = self._goal_now(g, rows, series)
+            out.append(
+                dict(
+                    goal_progress(g, cur, today),
+                    uid=g["uid"],
+                    building=g["uid"] == P.get("plan_goal"),
+                    title=f"{goal_title(g)} {goal_fmt(g, g['target'])}",
+                    now=goal_fmt(g, cur),
+                    start=goal_fmt(g, g["start_val"]),
+                    by_date=g["by_date"],
+                    note_text=g["note"],
+                )
+            )
+        return dict(ok=True, items=out)
+
+    @_locked
+    def save_goal(self, f):
+        try:
+            kind = f.get("kind")
+            sport, km = f.get("sport") or GOAL_SPORT.get(kind), None
+            raw = str(f.get("target", "")).strip()
+            if kind == "ftp":
+                target = float(raw)
+                ok = 50 <= target <= 600
+            elif kind == "volume":
+                target = float(raw)
+                ok = 1 <= target <= 40
+            elif kind in ("run_thr_pace", "css"):
+                target = from_ui("pace" if kind == "run_thr_pace" else "swim", raw)
+                ok = target and (120 <= target <= 900 if kind == "run_thr_pace" else 40 <= target <= 300)
+            elif kind == "time":
+                km, target = from_ui("dist", f.get("dist")), parse_clock(raw)
+                ok = sport in ("Run", "Bike") and km and 0.4 <= km <= 500 and target and 60 <= target <= 86400
+            else:
+                ok = False
+            by = f.get("by_date") or None
+            if by and dt.date.fromisoformat(by) < dt.date.today():
+                ok = False
+        except (ValueError, TypeError, ZeroDivisionError):
+            ok = False
+        if not ok or kind not in GOAL_KINDS:
+            return dict(ok=False, error="Check the target: a sensible value, and a date that hasn't passed")
+        g = dict(kind=kind, sport=sport if kind == "time" else GOAL_SPORT.get(kind), dist_km=km, target=target)
+        start = self._goal_now(g, self._workouts(), self._series())
+        if start is None:
+            return dict(ok=False, error="That can't be modelled yet, so there is nothing to measure progress from")
+        uid = uuid.uuid4().hex
+        self._db.execute(
+            "INSERT INTO goals(uid, kind, sport, dist_km, target, start_val, start_date, by_date, note) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (uid, kind, g["sport"], km, target, start, dt.date.today().isoformat(), by, (f.get("note") or "")[:200]),
+        )
+        self._db.commit()
+        return dict(ok=True, uid=uid, undo=self._remember("goals", [], [uid]))
+
+    @_locked
+    def delete_goal(self, uid):
+        was = P.get("plan_goal") == uid
+        out = self._take("goals", "uid", [uid], profile={"plan_goal": uid} if was else None)
+        if was:
+            P["plan_goal"] = ""
+            self._save()
+        return out
+
+    def _locks(self):
+        return [dict(r) for r in self._db.execute("SELECT * FROM day_locks ORDER BY date, id")]
+
+    def _weeks_cfg(self):
+        return [dict(r) for r in self._db.execute("SELECT * FROM plan_weeks ORDER BY start")]
+
+    def _plan(self, series=None, p=None, **over):
+        """The plan as it stands. `over` swaps in hypothetical races, scheduled, edits or locks (see what_if)."""
         series = series or self._series()
-        return build_plan(P, self._races(), ctl=series[-1][1], issues=self._issues(), scheduled=self._scheduled())
+        kw = dict(
+            races=self._races(),
+            issues=self._issues(),
+            scheduled=self._scheduled(),
+            edits=self._edits(),
+            locks=self._locks(),
+            weeks_cfg=self._weeks_cfg(),
+        )
+        kw.update(over)
+        gs = sorted({g["sport"] or GOAL_SPORT.get(g["kind"]) for g in self._goals()} - {None})
+        pp = dict(p or P, goal_sports=gs)
+        g = self._plan_goal()
+        if g:
+            sport = g["sport"] or GOAL_SPORT.get(g["kind"])
+            gt = dict(kind=g["kind"], sport=sport, end=g["by_date"] or "", target=g["target"], uid=g["uid"],
+                      fmt_dist=f"{leg_dist_ui(sport, g['dist_km'])} {'km' if not imp() else 'mi'}" if g["dist_km"] else "")
+            pp.update(goal_target=gt, goal_boost=1.6, goal_sports=sorted(set(gs) | {sport} - {None}))
+            if g["kind"] == "volume":  # a weekly-hours goal is the top of the ramp
+                pp["peak_hours"] = max(float(g["target"]), float(pp["weekly_hours"]))
+        races, info = kw.pop("races"), kw.pop("adapt_info", None)
+        if pp.get("auto_adapt", True):
+            base = build_plan(pp, races, ctl=series[-1][1], **dict(kw, orphans=None))[1]
+            ad = adapt_for(base, self._workouts(), dt.date.today(), kw["issues"], kw["weeks_cfg"])
+            if ad:
+                pp["adapt"] = ad
+                if info is not None:
+                    info.update(ad)
+        return build_plan(pp, races, ctl=series[-1][1], **kw)
+
+    def _plan_goal(self):
+        """The goal the plan builds toward, while it still can (a date that has passed no longer anchors a plan)."""
+        g = next((x for x in self._goals() if x["uid"] == P.get("plan_goal")), None)
+        return g if g and (not g["by_date"] or g["by_date"] >= dt.date.today().isoformat()) else None
 
     def _projection(self, target, weeks, series):
         """CTL/ATL from today to the target's race morning, following the plan."""
@@ -4935,6 +6000,7 @@ class Api:
                 kcal=round(nut["kcal"]), carbs=round(nut["carbs"]), protein=round(nut["protein"]), fat=round(nut["fat"])
             ),
             recent=[self._wrow(w) for w in rows[:6]],
+            suggestions=self._suggestions(),
             habits=[
                 dict(uid=h["uid"], name=h["name"], done=today.isoformat() in self._done_dates(h["uid"]))
                 for h in self._habits()
@@ -5005,6 +6071,7 @@ class Api:
             ),
             recovery=state["recovery"],
             done_today=[self._wrow(w) for w in rows if w["date"] == today.isoformat()],
+            suggestions=self._suggestions(),
         )
 
     @_locked
@@ -5247,7 +6314,7 @@ class Api:
         self._db.executemany(f"DELETE FROM {table} WHERE {key}=?", [(v,) for v in values])
         self._db.commit()
         self._undo_seq += 1
-        self._undo[self._undo_seq] = (table, rows, profile)
+        self._undo[self._undo_seq] = (table, rows, profile, ())
         for old in sorted(self._undo)[
             :-20
         ]:  # ponytail: last 20 deletes per session; persist if undo must survive restarts
@@ -5256,11 +6323,16 @@ class Api:
 
     @_locked
     def undo(self, token):
+        if isinstance(token, (list, tuple)):
+            done = [self.undo(t) for t in reversed(token)]
+            return dict(ok=all(r["ok"] for r in done), n=sum(r.get("n", 0) for r in done))
         entry = self._undo.pop(int(token), None)
         if not entry:
             return dict(ok=False, error="That can no longer be undone")
-        table, rows, profile = entry
+        table, rows, profile, created = entry
         with self._db:
+            for uid in created:  # rows the change added: undoing it removes them
+                self._db.execute(f"DELETE FROM {table} WHERE uid=?", (uid,))
             for r in rows:
                 cols = ",".join(f'"{c}"' for c in r)
                 self._db.execute(
@@ -5433,13 +6505,17 @@ class Api:
     # ---- plan
     @_locked
     def plan(self):
-        target, weeks = self._plan()
+        orphans, adapt = [], {}
+        target, weeks = self._plan(orphans=orphans, adapt_info=adapt)
         rows = self._workouts()
         done_by_day, sports_by_day = {}, {}
         for w in rows:
             done_by_day[w["date"]] = done_by_day.get(w["date"], 0) + (w["dur_s"] or 0)
             sports_by_day.setdefault(w["date"], set()).add(w["sport"])
         today = dt.date.today()
+        edits = {e["uid"]: e for e in self._edits()}
+        locks = {l["date"]: l for l in self._locks()}
+        wcfg = {c["start"]: c for c in self._weeks_cfg()}
         out = []
         for i, w in enumerate(weeks):
             end = w["start"] + 6 * ONE
@@ -5455,14 +6531,27 @@ class Api:
                         tss=round(s[3]),
                         desc=s[4],
                         **sess_ref(s),
+                        edited=str(s[5]).startswith("e:"),
+                        pinned=bool(edits.get(str(s[5])[2:], {}).get("pinned")),
                         done=s[1] in sports_by_day.get(d.isoformat(), ()),
                         fuel=fuel_session(P, s[1], s[2]),
                     )
                     for s in w["sessions"]
                     if s[0] == d
                 ]
+                lk = locks.get(d.isoformat())
                 days.append(
-                    dict(date=d.isoformat(), dow=f"{d:%a}", day=d.day, today=d == today, past=d < today, sessions=sess)
+                    dict(
+                        date=d.isoformat(),
+                        dow=f"{d:%a}",
+                        day=d.day,
+                        today=d == today,
+                        past=d < today,
+                        sessions=sess,
+                        lock=dict(kind=lk["kind"], label=LOCK_KINDS.get(lk["kind"], "Blocked"), note=lk["note"] or "")
+                        if lk
+                        else None,
+                    )
                 )
             out.append(
                 dict(
@@ -5475,7 +6564,9 @@ class Api:
                     done=round(dh / 3600, 1),
                     races=[s[4].split(" (")[0] for s in w["sessions"] if s[1] == "Race"],
                     tss=round(sum(s[3] for s in w["sessions"])),
-                    focus=PHASE_FOCUS[w["phase"]],
+                    focus=week_why(w),
+                    mode=(wcfg.get(w["start"].isoformat()) or {}).get("mode", "Normal"),
+                    budget_h=(wcfg.get(w["start"].isoformat()) or {}).get("budget_h"),
                     current=w["start"] <= today <= end,
                     past=end < today,
                     days=days,
@@ -5494,9 +6585,41 @@ class Api:
             days=P["days_per_week"],
             long_day=DOW[int(P["long_day"])],
             recovery=P["recovery_every"],
+            availability=P["availability"],
+            build_frac=P["build_frac"],
+            peak_weeks=P["peak_weeks"],
             races=[dict(id=r["id"], name=r["name"], priority=r["priority"]) for r in races],
             plan_race=next((r["id"] for r in races if r["uid"] == P.get("plan_race")), 0),
+            plan_goal=P.get("plan_goal") or "",
+            orphans=[orphan_row(e) for e in orphans],
+            adapt=dict(
+                adapt,
+                note=f"You've averaged {adapt['actual_h']} of {adapt['planned_h']} planned hours over the last "
+                f"{adapt['weeks']} weeks, so the coming weeks start at {round(adapt['factor'] * 100)}% and climb back "
+                "to the plan by the peak.",
+            )
+            if adapt
+            else None,
+            shape=self._shape_now(target),
+            shape_custom=bool(valid_shape(P["week_shape"])),
+            minutes={str(k): v for k, v in (P["availability"] or {}).items()},
+            tune={k: P[k] for k in TUNING_KEYS if k not in ("availability", "week_shape")},
+            goal_options=[dict(uid=g["uid"], title=f"{goal_title(g)} {goal_fmt(g, g['target'])}") for g in self._goals()],
+            building=self._building(target),
         )
+
+    def _shape_now(self, target):
+        roles = derive_shape(P, [l["sport"] for l in target["legs"]] if target else P["sports"])
+        return {str(d): r for d, r in roles.items()}
+
+    def _building(self, target):
+        """What the plan is for, in a line: a race, a goal or neither."""
+        g = self._plan_goal()
+        if g:
+            return dict(kind="goal", label=f"{goal_title(g)} {goal_fmt(g, g['target'])}", date=g["by_date"] or "")
+        if target:
+            return dict(kind="race", label=target["name"], date=target["date"])
+        return dict(kind="open", label="", date="")
 
     @_locked
     def restart_plan(self):
@@ -5506,9 +6629,749 @@ class Api:
 
     @_locked
     def set_plan_race(self, rid):
-        P["plan_race"] = next((r["uid"] for r in self._races() if r["id"] == int(rid or 0)), "")
+        was = {k: P[k] for k in ("plan_race", "plan_goal")}
+        P.update(plan_race=next((r["uid"] for r in self._races() if r["id"] == int(rid or 0)), ""), plan_goal="")
         self._save()
+        return dict(ok=True, undo=self._remember("plan_weeks", [], profile=was))
+
+    @_locked
+    def set_plan_goal(self, uid):
+        """Build the plan toward a goal instead of a race ("" goes back to the race)."""
+        if uid and not any(g["uid"] == uid for g in self._goals()):
+            return dict(ok=False, error="That goal no longer exists")
+        was = {k: P[k] for k in ("plan_race", "plan_goal")}
+        P.update(plan_goal=uid or "", plan_race="" if uid else P["plan_race"])
+        self._save()
+        return dict(ok=True, undo=self._remember("plan_weeks", [], profile=was))
+
+    # ---- plan edits: the athlete moves, pins, skips and adds sessions; the generator rebuilds around them
+    def _remember(self, table, before, created=(), profile=None):
+        """Undo token for a change that is not a delete: `before` rows are put back, `created` uids removed,
+        and `profile` keys restored."""
+        self._undo_seq += 1
+        self._undo[self._undo_seq] = (table, before, profile, tuple(created))
+        for old in sorted(self._undo)[:-20]:
+            del self._undo[old]
+        return self._undo_seq
+
+    def _find(self, ref):
+        weeks = self._plan()[1]
+        sess = next((s for w in weeks for s in w["sessions"] if isinstance(ref, str) and s[5] == ref), None)
+        return sess, weeks
+
+    def _put_edit(self, ref, sess, **f):
+        """Change the edit behind `ref`, or start one over the generated session `sess`. Returns an undo token."""
+        mine = ref.startswith("e:")
+        old = self._db.execute(
+            f"SELECT * FROM plan_edits WHERE {'uid' if mine else 'src'}=?", (ref[2:] if mine else ref,)
+        ).fetchone()
+        if old:
+            self._db.execute(
+                f"UPDATE plan_edits SET {', '.join(k + '=?' for k in f)} WHERE uid=?", [*f.values(), old["uid"]]
+            )
+            token = self._remember("plan_edits", [dict(old)])
+        else:
+            uid = uuid.uuid4().hex
+            row = {**dict(uid=uid, src=ref, date=sess[0].isoformat(), pinned=0), **f}
+            self._db.execute(
+                f"INSERT INTO plan_edits({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values())
+            )
+            token = self._remember("plan_edits", [], [uid])
+        self._db.commit()
+        return token
+
+    @_locked
+    def resolve_orphan(self, uid):
+        """Drop an edit that no longer matches any session in the plan (undoable)."""
+        return self._take("plan_edits", "uid", [uid])
+
+    @_locked
+    def move_session(self, ref, date):
+        try:
+            day = dt.date.fromisoformat(date)
+        except (ValueError, TypeError):
+            return dict(ok=False, error="Pick a day")
+        sess, weeks = self._find(ref)
+        if not sess or sess[1] == "Race":
+            return dict(ok=False, error="That session isn't in the plan any more")
+        if any(s[1] == "Race" and s[0] == day for w in weeks for s in w["sessions"]):
+            return dict(ok=False, error="That's race day")
+        if sched_uid(ref):
+            row = self._db.execute("SELECT * FROM scheduled WHERE uid=?", (sched_uid(ref),)).fetchone()
+            self._db.execute("UPDATE scheduled SET date=? WHERE uid=?", (day.isoformat(), row["uid"]))
+            self._db.commit()
+            return dict(ok=True, undo=self._remember("scheduled", [dict(row)]))
+        return dict(ok=True, undo=self._put_edit(ref, sess, date=day.isoformat()))
+
+    @_locked
+    def pin_session(self, ref, on=True):
+        sess, _ = self._find(ref)
+        if not sess or sess[1] == "Race" or sched_uid(ref):
+            return dict(ok=False, error="Only the plan's own sessions can be pinned: yours already stay put")
+        return dict(ok=True, undo=self._put_edit(ref, sess, pinned=int(bool(on))))
+
+    @_locked
+    def skip_session(self, ref):
+        sess, _ = self._find(ref)
+        if not sess or sess[1] == "Race":
+            return dict(ok=False, error="That session isn't in the plan any more")
+        if sched_uid(ref):
+            return self._take("scheduled", "uid", [sched_uid(ref)])
+        if ref.startswith("e:"):
+            row = self._db.execute("SELECT src FROM plan_edits WHERE uid=?", (ref[2:],)).fetchone()
+            if not row["src"]:  # one the athlete added: skipping it just removes it
+                return self._take("plan_edits", "uid", [ref[2:]])
+        return dict(ok=True, undo=self._put_edit(ref, sess, date=None))
+
+    @_locked
+    def reset_session(self, ref):
+        """Drop the edit behind an "e:" session: the plan's own session comes back, or the added one goes."""
+        if not isinstance(ref, str) or not ref.startswith("e:"):
+            return dict(ok=False, error="That session hasn't been changed")
+        return self._take("plan_edits", "uid", [ref[2:]])
+
+    def _insert_edit(self, day, sport, dur, tss, desc, group=None, src=None):
+        uid = uuid.uuid4().hex
+        self._db.execute(
+            "INSERT INTO plan_edits(uid, src, date, sport, dur_s, tss, desc, pinned, group_info) "
+            "VALUES(?,?,?,?,?,?,?,0,?)",
+            (uid, src, day, sport, dur, tss, desc, group),
+        )
+        return uid
+
+    @_locked
+    def add_session(self, f):
+        try:
+            day = dt.date.fromisoformat(f.get("date") or "").isoformat()
+            dur = float(f.get("dur_s") or float(f.get("h") or 0) * 3600 + float(f.get("m") or 0) * 60)
+            tss = float(f["tss"]) if f.get("tss") not in (None, "") else None
+        except (ValueError, TypeError):
+            return dict(ok=False, error="Check the day, duration and load")
+        sport = f.get("sport")
+        if sport not in ALL_SPORTS or dur <= 0:
+            return dict(ok=False, error="Pick a sport and enter a duration")
+        desc, group = ((f.get(k) or "").strip() or None for k in ("desc", "group_info"))
+        uid = self._insert_edit(day, sport, dur, tss, desc, group)
+        self._db.commit()
+        return dict(ok=True, ref="e:" + uid, undo=self._remember("plan_edits", [], [uid]))
+
+    @_locked
+    def session_variants(self, ref):
+        sess, _ = self._find(ref)
+        if not sess:
+            return dict(ok=False, error="That session isn't in the plan any more", variants=[])
+        return dict(
+            ok=True,
+            variants=[dict(v, dur=hms(v["dur_s"]), tss=round(v["tss"])) for v in variants_of(sess)],
+        )
+
+    @_locked
+    def apply_variant(self, ref, key):
+        sess, _ = self._find(ref)
+        v = next((v for v in variants_of(sess) if v["key"] == key), None) if sess else None
+        if not v:
+            return dict(ok=False, error="That option isn't available for this session")
+        return dict(ok=True, undo=self._put_edit(ref, sess, dur_s=v["dur_s"], tss=v["tss"], desc=v["desc"]))
+
+    @_locked
+    def fit_session(self, ref, minutes):
+        """The session in N minutes instead, as hard as it can honestly be."""
+        sess, _ = self._find(ref)
+        try:
+            dur = float(minutes) * 60
+        except (TypeError, ValueError):
+            dur = 0
+        if not sess or sess[1] in ("Race", "Rest") or sess[2] <= 0:
+            return dict(ok=False, error="That session isn't in the plan any more")
+        if not 300 <= dur <= 6 * 3600:
+            return dict(ok=False, error="Enter a time between 5 minutes and 6 hours")
+        dur, tss = reshape(sess, dur)
+        desc = f"Short on time: {dur / 60:.0f} min. Planned: {planned_text(sess[4])}"
+        return dict(ok=True, undo=self._put_edit(ref, sess, dur_s=dur, tss=tss, desc=desc))
+
+    @_locked
+    def copy_session(self, ref, date):
+        sess, weeks = self._find(ref)
+        try:
+            day = dt.date.fromisoformat(date)
+        except (ValueError, TypeError):
+            return dict(ok=False, error="Pick a day")
+        if not sess or sess[1] in ("Race", "Rest"):
+            return dict(ok=False, error="That session isn't in the plan any more")
+        if any(s[1] == "Race" and s[0] == day for w in weeks for s in w["sessions"]):
+            return dict(ok=False, error="That's race day")
+        uid = self._insert_edit(day.isoformat(), sess[1], sess[2], sess[3], sess[4])
+        self._db.commit()
+        return dict(ok=True, ref="e:" + uid, undo=self._remember("plan_edits", [], [uid]))
+
+    @_locked
+    def copy_week(self, src, dst):
+        """Lay one week's sessions over another's: the target's own sessions step aside, races and past days stay."""
+        try:
+            a, b = (dt.date.fromisoformat(x) for x in (src, dst))
+        except (ValueError, TypeError):
+            return dict(ok=False, error="Pick two weeks")
+        weeks = self._plan()[1]
+        wa = next((w for w in weeks if w["start"] == a), None)
+        wb = next((w for w in weeks if w["start"] == b), None)
+        if not wa or not wb or a == b:
+            return dict(ok=False, error="Pick two different weeks in the plan")
+        today, made = dt.date.today(), []
+        races = {s[0] for s in wb["sessions"] if s[1] == "Race"}
+        for s in wb["sessions"]:  # the plan's own sessions in the target week step aside
+            if s[0] >= today and s[1] != "Race" and isinstance(s[5], str) and s[5].startswith("p:"):
+                made.append(self._insert_edit(None, None, None, None, None, src=s[5]))
+        for s in wa["sessions"]:
+            day = b + (s[0] - a)
+            if s[1] not in ("Race", "Rest", "Mobility") and day >= today and day not in races:
+                made.append(self._insert_edit(day.isoformat(), s[1], s[2], s[3], planned_text(s[4])))
+        self._db.commit()
+        return dict(ok=True, n=len(made), undo=self._remember("plan_edits", [], made))
+
+    # ---- saved sessions (the interval builder's setups) that can be dragged onto any day
+    def _templates(self):
+        out = []
+        for r in self._db.execute("SELECT * FROM session_templates ORDER BY name COLLATE NOCASE"):
+            cfg = json.loads(r["cfg"] or "{}")
+            dur, tss = template_load(cfg, P)
+            out.append(
+                dict(
+                    uid=r["uid"], name=r["name"], sport=cfg.get("sport") or "Run", cfg=cfg, dur_s=dur, dur=hms(dur),
+                    tss=round(tss), desc=template_desc(cfg),
+                )
+            )
+        return out
+
+    @_locked
+    def templates(self):
+        return dict(items=self._templates())
+
+    @_locked
+    def save_template(self, f):
+        cfg, name = dict(f.get("cfg") or {}), (f.get("name") or "").strip()
+        if not name:
+            return dict(ok=False, error="Give the session a name")
+        try:
+            if cfg.get("sport") not in ALL_SPORTS or int(cfg.get("reps") or 0) < 1:
+                raise ValueError
+            dur, _ = template_load(cfg, P)
+            if dur <= 0:
+                raise ValueError
+        except (ValueError, TypeError, ZeroDivisionError):
+            return dict(ok=False, error="Check the sport, reps and times")
+        if f.get("uid"):
+            self._db.execute(
+                "UPDATE session_templates SET name=?, cfg=? WHERE uid=?", (name, json.dumps(cfg), f["uid"])
+            )
+        else:
+            self._db.execute("INSERT INTO session_templates(name, cfg) VALUES(?,?)", (name, json.dumps(cfg)))
+        self._db.commit()
         return dict(ok=True)
+
+    @_locked
+    def delete_template(self, uid):
+        return self._take("session_templates", "uid", [uid])
+
+    @_locked
+    def add_template(self, uid, date):
+        t = next((x for x in self._templates() if x["uid"] == uid), None)
+        if not t:
+            return dict(ok=False, error="That saved session is gone")
+        return self.add_session(
+            dict(date=date, sport=t["sport"], dur_s=t["dur_s"], tss=t["tss"], desc=f"{t['name']}: {t['desc']}")
+        )
+
+    @_locked
+    def set_lock(self, date, kind, note=""):
+        try:
+            day = dt.date.fromisoformat(date).isoformat()
+        except (ValueError, TypeError):
+            return dict(ok=False, error="Pick a day")
+        if kind not in LOCK_KINDS:
+            return dict(ok=False, error="Pick what kind of day it is")
+        old = [dict(r) for r in self._db.execute("SELECT * FROM day_locks WHERE date=?", (day,))]
+        if old:
+            self._db.execute("UPDATE day_locks SET kind=?, note=? WHERE date=?", (kind, (note or "").strip(), day))
+            token = self._remember("day_locks", old)
+        else:
+            uid = uuid.uuid4().hex
+            self._db.execute(
+                "INSERT INTO day_locks(uid, date, kind, note) VALUES(?,?,?,?)", (uid, day, kind, (note or "").strip())
+            )
+            token = self._remember("day_locks", [], [uid])
+        self._db.commit()
+        return dict(ok=True, undo=token)
+
+    @_locked
+    def delete_lock(self, date):
+        return self._take("day_locks", "date", [date])
+
+    @_locked
+    def set_week(self, start, mode="Normal", budget_h=None):
+        try:
+            a = dt.date.fromisoformat(start)
+            budget = float(budget_h) if budget_h not in (None, "") else None
+            if a.weekday() != 0 or mode not in WEEK_MODES or (budget is not None and not 0.5 <= budget <= 40):
+                raise ValueError
+        except (ValueError, TypeError):
+            return dict(ok=False, error="Pick a week, a mode, and an hours budget between 0.5 and 40")
+        key = a.isoformat()
+        old = [dict(r) for r in self._db.execute("SELECT * FROM plan_weeks WHERE start=?", (key,))]
+        if mode == "Normal" and budget is None:
+            return self._take("plan_weeks", "start", [key]) if old else dict(ok=True, undo=None)
+        if old:
+            self._db.execute("UPDATE plan_weeks SET mode=?, budget_h=? WHERE start=?", (mode, budget, key))
+            token = self._remember("plan_weeks", old)
+        else:
+            uid = uuid.uuid4().hex
+            self._db.execute(
+                "INSERT INTO plan_weeks(uid, start, mode, budget_h) VALUES(?,?,?,?)", (uid, key, mode, budget)
+            )
+            token = self._remember("plan_weeks", [], [uid])
+        self._db.commit()
+        return dict(ok=True, undo=token)
+
+    @_locked
+    def save_plan_tuning(self, f):
+        """Any of the plan-shaping settings (see TUNING_KEYS); the ones you leave out stay as they are."""
+        new, bad = clean_tuning(f)
+        if bad:
+            return dict(ok=False, error=bad)
+        was = {k: P[k] for k in TUNING_KEYS}
+        P.update(new)
+        self._save()
+        return dict(ok=True, undo=self._remember("plan_weeks", [], profile=was))
+
+    @_locked
+    def week_shape(self):
+        """The week as roles per weekday (what the plan does now, or what you set), plus the training days."""
+        target = pick_target(P, self._races(), dt.date.today())
+        return dict(
+            shape=self._shape_now(target),
+            custom=bool(valid_shape(P["week_shape"])),
+            roles=list(SHAPE_ROLES),
+        )
+
+    def save_week_shape(self, shape):
+        return self.save_plan_tuning(dict(week_shape=shape))
+
+    @_locked
+    def form_on(self, date):
+        """Fitness, fatigue and form on any day from the start of the log to race eve, with what that feels like."""
+        try:
+            d = dt.date.fromisoformat(date)
+        except (ValueError, TypeError):
+            return dict(ok=False, error="Pick a day")
+        series = self._series()
+        target, weeks = self._plan(series)
+        known = series if d <= dt.date.today() else self._projection(target, weeks, series)
+        row = next((r for r in known if r[0] == d), None)
+        if not row:
+            return dict(ok=False, error="There's no projection for that day: it runs to the day before your race")
+        return dict(ok=True, ctl=round(row[1], 1), atl=round(row[2], 1), tsb=round(row[3], 1), label=form_label(row[3]))
+
+    def _suggestions(self):
+        """One-tap fixes the plan could use right now, each option with what it does to race day. At most four."""
+        today = dt.date.today()
+        rows, series = self._workouts(), self._series()
+        sess = [x for w in self._plan(series)[1] for x in w["sessions"]]
+        mine = lambda x: isinstance(x[5], str) and x[5][:2] in ("p:", "e:")
+        train = lambda x: x[1] not in ("Race", "Rest", "Mobility", "Strength") and x[2]
+        hard = lambda x: train(x) and x[3] / (x[2] / 3600) > 60
+        shut = {l["date"] for l in self._locks()} | {x[0].isoformat() for x in sess if x[1] == "Race"}
+        day = lambda k: today + dt.timedelta(days=k)
+        busy = lambda d: any(y[0] == d and train(y) for y in sess)
+        # a day takes a session when it is open, unblocked, and has no hard session on it or next to it
+        free = lambda d: d >= today and d.isoformat() not in shut
+        room = lambda d: free(d) and not any(hard(y) and abs((y[0] - d).days) <= 1 for y in sess)
+        move = lambda x, d: dict(edits=[dict(ref=x[5], date=d.isoformat())])
+        label = lambda d: f"{d:%a} {d:%b} {d.day}"
+        wd = lambda i: dt.date(2024, 1, 1 + i).strftime("%A")  # 2024-01-01 is a Monday
+        out = []
+
+        def card(kind, title, why, *opts):
+            options = []
+            for text, change in opts:
+                wi = self.what_if(change)
+                options.append(dict(label=text, change=change, delta=wi["delta"], warnings=wi["warnings"]))
+            out.append(dict(kind=kind, title=title, why=why, options=options))
+
+        for back in (1, 2, 3):  # the most recent key session that went unlogged
+            d = day(-back)
+            miss = [x for x in not_done([x for x in sess if x[0] == d], rows, d) if mine(x) and train(x) and x[3] >= 40]
+            if miss:
+                x = max(miss, key=lambda m: m[3])
+                spare = next((day(k) for k in range(7) if free(day(k)) and not busy(day(k))), None)
+                opts = [("Skip it", dict(edits=[dict(ref=x[5], date=None)]))]
+                if spare:  # the what-if warns when that lands next to another hard day
+                    opts.insert(0, (f"Move to {label(spare)}", move(x, spare)))
+                why = f"{round(x[3])} TSS planned, nothing recorded."
+                card("missed", f"{x[1]} on {d:%a} wasn't logged", why, *opts)
+                break
+
+        by = {}
+        for r in self._wellness()[:56]:
+            v = [r[k] for k in ("soreness", "stress", "fatigue") if r[k]]
+            if v:
+                by.setdefault(dt.date.fromisoformat(r["date"]).weekday(), []).append(sum(v) / len(v))
+        avg = {k: sum(v) / len(v) for k, v in by.items() if len(v) >= 3}
+        if len(avg) >= 5 and max(avg.values()) - min(avg.values()) >= 0.7:
+            worst = max(avg, key=avg.get)
+            ahead = [x for x in sess if today < x[0] <= day(14) and x[0].weekday() == worst and mine(x) and hard(x)]
+            x = ahead[0] if ahead else None
+            monday = x[0] - dt.timedelta(days=x[0].weekday()) if x else None
+            better = lambda d: d > today and d.weekday() in avg and avg[d.weekday()] < avg[worst] - 0.4 and room(d)
+            cand = [d for d in (monday + dt.timedelta(days=k) for k in range(7)) if better(d)] if x else []
+            if cand:
+                to = min(cand, key=lambda d: avg[d.weekday()])
+                why = f"Your check-ins run worst on {wd(worst)}s. {wd(to.weekday())} is usually better."
+                card("energy", f"{wd(worst)}s are your flattest day", why, (f"Move {x[1]} to {label(to)}", move(x, to)))
+
+        if self._wx:  # the outdoor session with the worst weather this week, and a clearly better day for it
+            worst = None
+            for x in sess:
+                if today <= x[0] <= day(5) and mine(x) and train(x) and x[1] in OUTDOOR and not_done([x], rows, x[0]):
+                    start = at(x[0], self._scheduled_time(x))
+                    w = wx_during(self._wx, start, start + dt.timedelta(seconds=x[2]))
+                    if w and (not worst or wx_score(w) > worst[0]):
+                        worst = (wx_score(w), x, w)
+            if worst and worst[0] >= 6:
+                _, x, w = worst
+                tries = []  # a spare day, or an easy session on a clearer day to trade places with
+                for d in (d for d in map(day, range(6)) if d != x[0] and free(d)):
+                    b, there = best_window(self._wx, d, x[2]), [y for y in sess if y[0] == d and train(y)]
+                    if not b or b[0] > worst[0] - 6:
+                        continue
+                    if not there:
+                        tries.append((b[0], d, b, None))
+                    elif len(there) == 1 and d > today and mine(there[0]) and not hard(there[0]):
+                        tries.append((b[0] + 1, d, b, there[0]))
+                if tries:
+                    _, d, b, y = min(tries, key=lambda t: t[0])
+                    change = move(x, d)
+                    if y:
+                        change["edits"] += move(y, x[0])["edits"]
+                    text = f"Swap with {d:%a}'s {y[1]}" if y else f"Move to {label(d)}"
+                    why = f"{wx_short(w)} then; {d:%a} is {wx_short(b[2])}."
+                    card("weather", f"{x[1]} on {x[0]:%a} looks rough", why, (text, change))
+
+        cur = today - dt.timedelta(days=today.weekday())
+        tgt, all_w = self._plan(series)
+        weeks_ = [w for w in all_w if w["start"] < cur][-6:]
+        first = weeks_[0]["start"].isoformat() if weeks_ else ""
+        logging = first and any(r["date"] >= first for r in rows)  # no logging at all isn't a pattern
+        if len(weeks_) >= 5 and logging and not self._weeks_cfg():
+            miss, plan_n = {}, {}
+            for w in weeks_:
+                for k in range(7):
+                    d = w["start"] + dt.timedelta(days=k)
+                    day_s = [x for x in w["sessions"] if x[0] == d and mine(x) and train(x)]
+                    if day_s:
+                        plan_n[k] = plan_n.get(k, 0) + 1
+                        miss[k] = miss.get(k, 0) + (1 if not_done(day_s, rows, d) == day_s else 0)
+            bad = [k for k in plan_n if plan_n[k] >= 4 and miss.get(k, 0) >= plan_n[k] - 1 and miss.get(k, 0) >= 4]
+            if bad:
+                k = max(bad, key=lambda x: miss[x])
+                shape = self._shape_now(tgt)
+                if sum(1 for r in shape.values() if r != "rest") > 3 and shape[str(k)] not in ("rest", "long"):
+                    new = dict(shape, **{str(k): "rest"})
+                    why = f"{miss[k]} of the last {plan_n[k]} {wd(k)} sessions went unlogged."
+                    card("rhythm", f"{wd(k)} isn't working for you", why,
+                         (f"Make {wd(k)} a rest day", dict(profile=dict(week_shape=new))))
+        night = next((r for r in self._wellness()[:2] if r["sleep_h"] and r["date"] >= (today - ONE).isoformat()), None)
+        if night and night["sleep_h"] < sleep_goal(P) - 1.5:
+            todo = [x for x in not_done([x for x in sess if x[0] == today], rows, today) if mine(x) and hard(x)]
+            x = todo[0] if todo else None
+            if x:
+                tss = round(x[2] / 3600 * 0.65**2 * 100, 1)
+                easy = dict(edits=[dict(ref=x[5], tss=tss, desc="Easy aerobic, Z2 only: short sleep last night.")])
+                title = f"You slept {night['sleep_h']:.1f} h"
+                card("sleep", title, f"Today's {x[1]} is a hard one.", ("Make it easy", easy))
+        return out[:4]
+
+    @_locked
+    def export_ics_text(self, weeks=12):
+        """The plan for the next `weeks` weeks as an iCalendar file. A session's UID comes from its plan ref, so
+        importing it again updates the calendar entry instead of duplicating it."""
+        today = dt.date.today()
+        last = today + dt.timedelta(weeks=max(1, min(int(weeks), 52)))
+        rows = self._db.execute("SELECT uid, src, group_info FROM plan_edits").fetchall()
+        groups = {"e:" + r["uid"]: r["group_info"] for r in rows if r["group_info"]}
+        origin = {"e:" + r["uid"]: r["src"] for r in rows if r["src"]}  # a moved session keeps its calendar entry
+        events = []
+        for w in self._plan()[1]:
+            for x in w["sessions"]:
+                if x[1] in ("Race", "Rest") or not today <= x[0] <= last or not x[2]:
+                    continue
+                at_ = at(x[0], self._scheduled_time(x))
+                text = f"{x[4]}\n{round(x[3])} TSS" if x[4] else f"{round(x[3])} TSS"
+                where = groups.get(x[5])
+                events.append(
+                    dict(
+                        uid=hashlib.sha1(str(origin.get(x[5]) or x[5] or f"{x[0]}|{x[1]}").encode()).hexdigest()[:20],
+                        summary=f"{x[1]} {hms(x[2])}" + (" (group)" if where else ""),
+                        time=at_,
+                        dur_s=x[2],
+                        desc=text + (f"\nGroup: {where}" if where else ""),
+                        where=where,
+                    )
+                )
+        for r in self._races():
+            if today.isoformat() <= r["date"] <= last.isoformat():
+                day = dt.date.fromisoformat(r["date"])
+                events.append(dict(uid="race-" + str(r["uid"]), summary=f"Race: {r['name']}", day=day))
+        for l in self._locks():
+            if today.isoformat() <= l["date"] <= last.isoformat():
+                note = f": {l['note']}" if l["note"] else ""
+                day = dt.date.fromisoformat(l["date"])
+                events.append(dict(uid="lock-" + l["date"], summary=LOCK_KINDS[l["kind"]] + note, day=day))
+        return build_ics(events)
+
+    def export_ics(self, weeks=12):
+        path = self._save_dialog("training-plan.ics", ("Calendar (*.ics)",))
+        if not path:
+            return dict(cancelled=True)
+        with open(path, "w", newline="", encoding="utf-8") as fh:
+            fh.write(self.export_ics_text(weeks))
+        return dict(path=path)
+
+    @_locked
+    def reset_ics_token(self):
+        """A fresh subscribe link; the old one stops working at once."""
+        P["ics_token"] = secrets.token_urlsafe(12)
+        save_profile(self._db, touch=False)
+        return self.hub_status()
+
+    @_locked
+    def export_plan_text(self):
+        """Everything you've bent the plan with, as a file someone else can import as a scenario."""
+        keep = lambda e, k: e[k] is not None or (k == "date" and e["src"])  # a NULL date on a hidden slot is a skip
+        change = dict(
+            edits=[dict(ref=e["src"] or "", **{k: e[k] for k in EDIT_FIELDS if keep(e, k)}) for e in self._edits()],
+            locks=[dict(date=l["date"], kind=l["kind"]) for l in self._locks()],
+            weeks=[dict(start=c["start"], mode=c["mode"], budget_h=c["budget_h"]) for c in self._weeks_cfg()],
+            profile={k: P[k] for k in TUNING_KEYS if P[k] != DEFAULTS[k]},
+        )
+        rows = self._db.execute("SELECT name, cfg FROM session_templates")
+        tpls = [dict(name=t["name"], cfg=json.loads(t["cfg"])) for t in rows]
+        return json.dumps(dict(app=APP, kind="plan", v=1, change=change, templates=tpls), indent=1)
+
+    def export_plan(self):
+        path = self._save_dialog("training-plan.json", ("JSON (*.json)",))
+        if not path:
+            return dict(cancelled=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(self.export_plan_text())
+        return dict(path=path)
+
+    @_locked
+    def import_plan_text(self, text):
+        """A plan file arrives as a scenario to review, never straight into the plan. Its sessions' templates are
+        added by name when you don't have them."""
+        try:
+            data = json.loads(text) if len(text) < 2_000_000 else None
+            ok = isinstance(data, dict) and data.get("kind") == "plan" and clean_change(data.get("change"))
+        except ValueError:
+            ok = False
+        if not ok:
+            return dict(ok=False, error="That isn't a plan file from Endurance Coach, or it has nothing in it")
+        r = self.save_scenario("Shared plan " + dt.date.today().isoformat(), data["change"])
+        have = {t["name"] for t in self._db.execute("SELECT name FROM session_templates")}
+        added = 0
+        for t in data.get("templates") or []:
+            if isinstance(t, dict) and t.get("name") not in have:
+                added += bool(self.save_template(dict(name=t.get("name"), cfg=t.get("cfg"))).get("ok"))
+        return dict(ok=True, uid=r["uid"], templates=added, undo=r["undo"])
+
+    def import_plan(self):
+        import webview
+
+        paths = self._window.create_file_dialog(webview.FileDialog.OPEN, file_types=("JSON (*.json)",))
+        if not paths:
+            return dict(cancelled=True)
+        with open(paths[0], encoding="utf-8") as fh:
+            return self.import_plan_text(fh.read())
+
+    @_locked
+    def scenarios(self):
+        """Saved what-ifs, each with what it would do to race day as the plan stands now."""
+        items = []
+        for r in self._db.execute("SELECT * FROM scenarios ORDER BY id"):
+            try:
+                c = clean_change(json.loads(r["change"]))
+            except ValueError:
+                c = None
+            wi = self.what_if(c) if c else None
+            items.append(
+                dict(
+                    uid=r["uid"],
+                    name=r["name"],
+                    summary=change_summary(c) if c else "",
+                    delta=wi and wi["delta"],
+                    warnings=wi["warnings"] if wi else [],
+                    change=c,
+                )
+            )
+        return dict(ok=True, items=items)
+
+    @_locked
+    def save_scenario(self, name, change):
+        name, c = (name or "").strip()[:60], clean_change(change)
+        if not name or not c:
+            return dict(ok=False, error="Give it a name, and change something first")
+        uid = uuid.uuid4().hex
+        self._db.execute("INSERT INTO scenarios(uid, name, change) VALUES(?,?,?)", (uid, name, json.dumps(c)))
+        self._db.commit()
+        return dict(ok=True, uid=uid, undo=self._remember("scenarios", [], [uid]))
+
+    @_locked
+    def delete_scenario(self, uid):
+        return self._take("scenarios", "uid", [uid])
+
+    @_locked
+    def apply_scenario(self, uid):
+        """Write a scenario's changes into the plan for real. The race date is a preview only, so it is left alone."""
+        row = self._db.execute("SELECT change FROM scenarios WHERE uid=?", (uid,)).fetchone()
+        c = clean_change(json.loads(row["change"])) if row else None
+        if not c:
+            return dict(ok=False, error="That scenario isn't there any more")
+        return self.apply_change(c)
+
+    @_locked
+    def apply_change(self, change):
+        """Write a what-if change into the plan for real; the undo token is a list, newest change last."""
+        c = clean_change(change)
+        if not c:
+            return dict(ok=False, error="There's nothing to change")
+        tokens = []
+        take = lambda r: tokens.append(r["undo"]) if r.get("ok") and r.get("undo") else None
+        for e in c.get("edits", []):
+            f = {k: e[k] for k in EDIT_FIELDS if k in e}
+            if not e["ref"]:
+                take(self.add_session(dict(f, dur_s=f.get("dur_s") or 3600)))
+                continue
+            sess, _ = self._find(e["ref"])
+            if not sess or sess[1] == "Race":
+                continue
+            if sched_uid(e["ref"]):
+                if f.get("date"):
+                    take(self.move_session(e["ref"], f["date"]))
+            else:
+                if f:
+                    tokens.append(self._put_edit(e["ref"], sess, **f))
+        for l in c.get("locks", []):
+            take(self.set_lock(l["date"], l["kind"]))
+        for d in c.get("unlock", []):
+            take(self.delete_lock(d))
+        for w in c.get("weeks", []):
+            take(self.set_week(w["start"], w["mode"], w["budget_h"]))
+        if c.get("profile"):
+            take(self.save_plan_tuning(dict({k: P[k] for k in TUNING_KEYS}, **c["profile"])))
+        return dict(ok=True, undo=tokens, skipped=["race_date"] if c.get("race_date") else [])
+
+    @_locked
+    def what_if(self, change=None):
+        """Read-only: the plan with `change` applied, beside the plan as it stands, and what that does to race day.
+        change: edits [{ref, date, sport?, dur_s?, tss?, desc?, pinned?}] (a ref of "" adds a session; date None
+        skips), locks [{date, kind}], unlock [date], profile {key: value}, race_date. Nothing is written."""
+        change = change or {}
+        series, today = self._series(), dt.date.today()
+        p = dict(P, **(change.get("profile") or {}))
+        races, edits, sched, locks = self._races(), self._edits(), self._scheduled(), self._locks()
+        new_edits, new_sched = list(edits), sched
+        for c in change.get("edits") or []:
+            ref = c.get("ref") or ""
+            if ref.startswith("s:"):
+                new_sched = [dict(x, date=c["date"]) if x["uid"] == ref[2:] else x for x in new_sched]
+                continue
+            cur = next((e for e in new_edits if ref == "e:" + e["uid"] or (ref and ref == e["src"])), None)
+            if cur:
+                new_edits.remove(cur)
+            row = dict(cur) if cur else dict(
+                uid=uuid.uuid4().hex, src=ref or None, date=None, sport=None, dur_s=None, tss=None, desc=None, pinned=0
+            )
+            row.update({k: c[k] for k in ("date", "sport", "dur_s", "tss", "desc", "pinned") if k in c})
+            new_edits.append(row)
+        gone = set(change.get("unlock") or [])
+        new_locks = [l for l in locks if l["date"] not in gone] + [
+            dict(uid="", date=l["date"], kind=l.get("kind") or "busy", note="") for l in change.get("locks") or []
+        ]
+        wcfg, new_wcfg = self._weeks_cfg(), self._weeks_cfg()
+        for c in change.get("weeks") or []:
+            new_wcfg = [x for x in new_wcfg if x["start"] != c["start"]]
+            if c.get("mode", "Normal") != "Normal" or c.get("budget_h"):
+                mode = c.get("mode") or "Normal"
+                new_wcfg.append(dict(uid="", start=c["start"], mode=mode, budget_h=c.get("budget_h")))
+        new_races = races
+        if change.get("race_date"):
+            tid = (pick_target(p, races, today) or {}).get("id")
+            new_races = [dict(r, date=change["race_date"]) if r["id"] == tid else r for r in races]
+        t0, w0 = self._plan(series, races=races, scheduled=sched, edits=edits, locks=locks, weeks_cfg=wcfg)
+        t1, w1 = self._plan(
+            series, p=p, races=new_races, scheduled=new_sched, edits=new_edits, locks=new_locks, weeks_cfg=new_wcfg
+        )
+
+        def race_day(t, w, pp):
+            proj = self._projection(t, w, series)
+            if not proj:
+                return None
+            ctl = proj[-1][1]
+            return dict(
+                labels=[x[0].isoformat() for x in proj],
+                ctl=[round(x[1], 1) for x in proj],
+                atl=[round(x[2], 1) for x in proj],
+                tsb=[round(x[3], 1) for x in proj],
+                ctl_race=round(ctl, 1),
+                tsb_race=round(proj[-1][3], 1),
+                finish_s=predict(pp, t, ctl)["total"],
+            )
+
+        a, b = race_day(t0, w0, P), race_day(t1, w1, p)
+        delta = None
+        if a and b:
+            delta = dict(
+                form=round(b["tsb_race"] - a["tsb_race"], 1),
+                ctl=round(b["ctl_race"] - a["ctl_race"], 1),
+                finish_s=b["finish_s"] - a["finish_s"] if a["finish_s"] and b["finish_s"] else None,
+            )
+        before = plan_warnings(w0, locks)
+        warns = [t for k, t in plan_warnings(w1, new_locks).items() if k not in before]
+        for x0, x1 in zip(w0, w1):
+            if x0["start"] == x1["start"] and x1["phase"] in ("Taper", "Race week", "Checkpoint"):
+                load = lambda x: sum(s[3] for s in x["sessions"] if s[1] != "Race")
+                if load(x1) > load(x0) * 1.05:
+                    warns.append(f"Adds load in your {x1['phase'].lower()} week of {x1['start']:%b} {x1['start'].day}")
+        weekly = []
+        for x0, x1 in zip(w0, w1):
+            if x0["start"] != x1["start"] or x1["start"] + 6 * ONE < today:
+                continue
+            per_day = lambda x: [
+                round(sum(s[3] for s in x["sessions"] if s[0] == x["start"] + k * ONE and s[1] != "Race"))
+                for k in range(7)
+            ]
+            hard_days = lambda x: [
+                f"{x['start'] + k * ONE:%a}"
+                for k in range(7)
+                if any(is_hard(s) for s in x["sessions"] if s[0] == x["start"] + k * ONE)
+            ]
+            if per_day(x0) != per_day(x1):
+                weekly.append(
+                    dict(
+                        label=f"{x1['start']:%b} {x1['start'].day}",
+                        base=per_day(x0),
+                        new=per_day(x1),
+                        hours=[round(x0["hours"], 1), round(x1["hours"], 1)],
+                        hard=[hard_days(x0), hard_days(x1)],
+                    )
+                )
+        quiet = bool(delta) and abs(delta["form"]) < 1 and abs(delta["ctl"]) < 0.5
+        return dict(ok=True, base=a, new=b, delta=delta, warnings=warns, weekly=weekly[:3], quiet=quiet)
+
+    @_locked
+    def spacing_fixes(self):
+        """Read-only: one-tap fixes for hard sessions on back-to-back days."""
+        _, weeks = self._plan()
+        return dict(ok=True, items=spacing_fixes(weeks, self._locks(), self._edits(), dt.date.today()))
 
     # ---- races
     @_locked
@@ -6514,8 +8377,12 @@ class Api:
     def hub_status(self):
         port = self._hub.server_address[1] if self._hub else None
         d = self.devices()
+        if not P.get("ics_token"):
+            P["ics_token"] = secrets.token_urlsafe(12)
+            save_profile(self._db, touch=False)
         return dict(
             on=bool(self._hub),
+            ics=[f"http://{ip}:{port}/plan.ics?k={P['ics_token']}" for ip in lan_addresses()] if port else [],
             code=P["hub_code"],
             port=port,
             addresses=[f"{ip}:{port}" for ip in lan_addresses()] if port else [],
@@ -6701,7 +8568,7 @@ class Api:
         _, weeks = self._plan()
         d = dt.date.fromisoformat(day)
         wk = next((w for w in weeks if w["start"] <= d < w["start"] + 7 * ONE), None)
-        same = [x for x in (wk["sessions"] if wk else []) if x[1] == sport and not isinstance(x[5], str) and x[2]]
+        same = [x for x in (wk["sessions"] if wk else []) if x[1] == sport and not is_theirs(x[5]) and x[2]]
         if not same:
             return 2700.0
         on_day = [x[2] for x in same if x[0] == d]
@@ -6788,8 +8655,8 @@ class Api:
         )
 
     def _scheduled_time(self, s):
-        if isinstance(s[5], str):
-            sc = next((x for x in self._scheduled() if x["uid"] == s[5][2:]), None)
+        if sched_uid(s[5]):
+            sc = next((x for x in self._scheduled() if x["uid"] == sched_uid(s[5])), None)
             if sc:
                 return sc["time"]
         return session_time(P, s)
@@ -6806,8 +8673,8 @@ class Api:
         s = on_day[int(k)]
         if s[1] in ("Race", "Rest"):
             return None
-        if isinstance(s[5], str):
-            return self.session_brief(s[5][2:])
+        if sched_uid(s[5]):
+            return self.session_brief(sched_uid(s[5]))
         sc = dict(
             uid=None, date=date, time=session_time(P, s), sport=s[1], kind=kind_of(s), dur_s=s[2], dist_km=0.0, notes=""
         )
@@ -7233,10 +9100,7 @@ class Api:
         for k in keys:
             label, kind, hlp = PROFILE_META[k]
             if k == "plan_race":
-                kind = (
-                    "select",
-                    [("", "Auto")] + [(r["uid"], f"{r['name']} ({r['priority']}) · {r['date']}") for r in races],
-                )
+                kind = ("select", self._target_options(races))
             sel = isinstance(kind, tuple)
             fields.append(
                 dict(
@@ -7246,10 +9110,20 @@ class Api:
                     help=hlp,
                     options=[[str(a), b] for a, b in kind[1]] if sel else None,
                     unit=unit(kind) if not sel else "",
-                    value=str(P[k]) if sel else self._profile_value(k, kind),
+                    value=(("goal:" + P["plan_goal"]) if k == "plan_race" and P["plan_goal"] else str(P[k]))
+                    if sel
+                    else self._profile_value(k, kind),
                 )
             )
         return fields
+
+    def _target_options(self, races):
+        """What the plan can build toward: the next A race (auto), a race, or one of the athlete's goals."""
+        return (
+            [("", "Auto")]
+            + [(r["uid"], f"{r['name']} ({r['priority']}) · {r['date']}") for r in races]
+            + [("goal:" + g["uid"], f"Goal: {goal_title(g)} {goal_fmt(g, g['target'])}") for g in self._goals()]
+        )
 
     @_locked
     def profile(self):
@@ -7260,10 +9134,7 @@ class Api:
             for k in keys:
                 label, kind, hlp = PROFILE_META[k]
                 if k == "plan_race":
-                    kind = (
-                        "select",
-                        [("", "Auto")] + [(r["uid"], f"{r['name']} ({r['priority']}) · {r['date']}") for r in races],
-                    )
+                    kind = ("select", self._target_options(races))
                 sel = isinstance(kind, tuple)
                 fields.append(
                     dict(
@@ -7273,10 +9144,21 @@ class Api:
                         help=hlp,
                         options=[[str(a), b] for a, b in kind[1]] if sel else None,
                         unit=unit(kind) if not sel else "",
-                        value=str(P[k]) if sel else self._profile_value(k, kind),
+                        value=(("goal:" + P["plan_goal"]) if k == "plan_race" and P["plan_goal"] else str(P[k]))
+                        if sel
+                        else self._profile_value(k, kind),
                     )
                 )
-            secs.append(dict(title=title, fields=fields))
+            secs.append(
+                dict(
+                    title=title,
+                    fields=fields,
+                    note="The shape of your week, hours, recovery, taper and strength are set on the Training plan "
+                    "page, under Shape my plan, where you can see what they do."
+                    if title == "Training plan"
+                    else "",
+                )
+            )
         return dict(sections=secs, all_sports=ALL_SPORTS)
 
     @_locked
@@ -7298,7 +9180,10 @@ class Api:
                 elif kind == "clock":
                     h, m = clock(s)
                     upd[k] = f"{h:02d}:{m:02d}"
-                elif isinstance(kind, tuple) or k == "plan_race":
+                elif k == "plan_race":  # a race, or "goal:<uid>"
+                    goal = str(s)[5:] if str(s).startswith("goal:") else ""
+                    upd.update(plan_race="" if goal else str(s), plan_goal=goal)
+                elif isinstance(kind, tuple):
                     upd[k] = type(DEFAULTS[k])(s)
                 elif str(s).strip() == self._profile_value(k, kind):
                     continue  # unchanged: don't round-trip through display rounding
@@ -7650,6 +9535,21 @@ def start_hub(api, port=8977):
 
         def do_GET(self):
             route = self.path.split("?")[0]
+            if route == "/plan.ics":  # a calendar app can't send the pairing header, so this link carries its own key
+                ip = self.client_address[0]
+                count, until = fails.get(ip, (0, 0))
+                key = (self.path.partition("?k=")[2] or "").split("&")[0]
+                if time.time() < until:
+                    return self._send(429, dict(error="Too many wrong keys. Wait a minute."))
+                if not P.get("ics_token") or not hmac.compare_digest(key, P["ics_token"]):
+                    fails[ip] = (count + 1, time.time() + 60 if count + 1 >= 5 else 0)
+                    return self._send(401, dict(error="Wrong key"))
+                self.send_response(200)
+                body = api.export_ics_text().encode()
+                self.send_header("Content-Type", "text/calendar; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                return self.wfile.write(body)
             if route == "/hello":
                 if self._authorised():
                     self._send(200, dict(app=APP, name=P["name"], serves_assets=bool(P.get("serve_assets"))))

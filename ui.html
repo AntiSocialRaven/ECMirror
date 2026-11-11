@@ -1206,6 +1206,166 @@
         -webkit-box-orient: vertical;
         overflow: hidden;
       }
+      /* plan: drag a session onto another day */
+      .sess[data-ref],
+      .msess[data-ref],
+      .pm-chip[data-ref] {
+        cursor: grab;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+      }
+      .dragging {
+        opacity: 0.35;
+      }
+      .drag-ghost {
+        position: fixed;
+        z-index: 90;
+        pointer-events: none;
+        margin: 0;
+        box-shadow: var(--shadow-lg);
+        transform: rotate(1.5deg);
+      }
+      body.dragging-plan {
+        cursor: grabbing;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      .day.drop,
+      .pm-cell.drop,
+      .mday-card.drop {
+        border-color: var(--brand);
+        box-shadow: inset 0 0 0 2px var(--brand);
+      }
+      .day.locked,
+      .pm-cell.locked,
+      .mday-card.locked {
+        background-image: repeating-linear-gradient(135deg, transparent 0 7px, var(--border) 7px 8px);
+      }
+      .lockb {
+        font-size: 10.5px;
+        font-weight: 650;
+        color: var(--warn);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      .day-h.tap,
+      .pm-cell .n {
+        cursor: pointer;
+      }
+      .pinI {
+        color: var(--brand);
+        display: inline-flex;
+      }
+      .pinI svg {
+        width: 12px;
+        height: 12px;
+      }
+      .pdhud {
+        display: none;
+        position: fixed;
+        left: 50%;
+        bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+        transform: translateX(-50%);
+        z-index: 95;
+        max-width: min(560px, 94vw);
+        background: var(--panel);
+        border: 1px solid var(--border2);
+        border-radius: var(--r-sm);
+        box-shadow: var(--shadow-lg);
+        padding: 10px 14px;
+        font-size: 13px;
+        pointer-events: none;
+      }
+      .pdhud .mini {
+        display: flex;
+        gap: 3px;
+        align-items: flex-end;
+        height: 30px;
+        margin-top: 6px;
+      }
+      .pdhud .mini i {
+        width: 9px;
+        background: var(--brand);
+        border-radius: 2px;
+      }
+      .pdhud .w {
+        color: var(--warn);
+        margin-top: 5px;
+        font-size: 12.5px;
+      }
+      .pm-grid {
+        display: grid;
+        grid-template-columns: repeat(7, minmax(0, 1fr));
+        gap: 5px;
+      }
+      .pm-dow {
+        font-size: 11.5px;
+        font-weight: 650;
+        color: var(--muted);
+        text-align: center;
+        padding-bottom: 2px;
+      }
+      .pm-cell {
+        background: var(--panel2);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        min-height: 96px;
+        padding: 5px;
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        min-width: 0;
+      }
+      .pm-cell.today {
+        border-color: var(--brand);
+        box-shadow: inset 0 0 0 1px var(--brand);
+      }
+      .pm-cell.past,
+      .pm-cell.other {
+        opacity: 0.6;
+      }
+      .pm-cell .n {
+        font-size: 11.5px;
+        font-weight: 650;
+        color: var(--muted);
+        display: flex;
+        justify-content: space-between;
+        gap: 4px;
+      }
+      .pm-chip {
+        border-left: 3px solid var(--c);
+        background: var(--panel);
+        border-radius: 4px;
+        padding: 2px 5px;
+        font-size: 11.5px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        cursor: pointer;
+      }
+      .pm-chip.done {
+        opacity: 0.6;
+      }
+      .tpl {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        background: var(--panel2);
+        border: 1px solid var(--border);
+        border-left: 3px solid var(--c);
+        border-radius: 6px;
+        padding: 6px 10px;
+        font-size: 12.5px;
+        cursor: grab;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+      }
+      .tpl span {
+        color: var(--muted);
+        font-size: 11.5px;
+      }
       .check {
         width: 16px;
         height: 16px;
@@ -3794,6 +3954,12 @@
       html.mobile .msess svg {
         color: var(--faint);
       }
+      html.mobile .msess.dragging {
+        opacity: 0.35;
+      }
+      html.mobile .mday-card .dh.tap {
+        cursor: pointer;
+      }
       html.mobile .mhero .top .prio {
         flex: none;
       }
@@ -5112,6 +5278,7 @@
         Recovery: "#12b76a",
         Taper: "#b35cff",
         "Race week": "#f03d3d",
+        Checkpoint: "#f5b400",
       };
       const ZC = ["#a0a8b8", "#00a3ff", "#12b76a", "#f5b400", "#ff6b1a", "#f03d3d"];
       const SPORT_ICON = {
@@ -5137,8 +5304,12 @@
           old = Date.now() - d.getTime() > 365 * 864e5;
         return d.toLocaleDateString("en-US", old ? { month: "short", day: "numeric", year: "numeric" } : { month: "short", day: "numeric" });
       };
+      // pywebview loads this page from a string, where localStorage can be blocked; the memory copy keeps
+      // tabs and views working for the session even then
+      const MEM = {};
       const store = {
         get(k, d) {
+          if (k in MEM) return MEM[k];
           try {
             const v = localStorage.getItem("ec." + k);
             return v == null ? d : JSON.parse(v);
@@ -5147,6 +5318,7 @@
           }
         },
         set(k, v) {
+          MEM[k] = v;
           try {
             localStorage.setItem("ec." + k, JSON.stringify(v));
           } catch {}
@@ -5355,7 +5527,7 @@
           if (!d) return;
           if (se.area)
             s += `<path d="${d}L${X(last)},${Y(Math.max(a, 0))}L${X(first)},${Y(Math.max(a, 0))}Z" fill="url(#g${k}${el.id})"/>`;
-          s += `<path class="line" d="${d}" style="stroke:${se.color};${se.dash ? "stroke-dasharray:5 4;opacity:.8" : ""}${se.thin ? ";stroke-width:1.6" : ""}"/>`;
+          s += `<path class="line" d="${d}" style="stroke:${se.color};${se.ghost ? "stroke-dasharray:2 4;opacity:.4" : se.dash ? "stroke-dasharray:5 4;opacity:.8" : ""}${se.thin ? ";stroke-width:1.6" : ""}"/>`;
         });
         s += `<line class="hx" y1="${m.t}" y2="${m.t + ph}"/><g class="dots"></g><rect class="hit" x="${m.l}" y="${m.t}" width="${pw}" height="${ph}" fill="transparent"/></svg><div class="tip"></div>`;
         el.classList.add("chart-wrap");
@@ -5623,7 +5795,13 @@
           const c = $("#content"),
             top = c.scrollTop;
           CHARTS = [];
-          await ((MOBILE && MPAGES[PAGE]) || PAGES[PAGE])(c);
+          // a call that never answers must not freeze every later click behind it
+          let t;
+          await Promise.race([
+            ((MOBILE && MPAGES[PAGE]) || PAGES[PAGE])(c),
+            new Promise((_, no) => (t = setTimeout(() => no(new Error("This page took too long to load. Try again.")), 20000))),
+          ]).catch((e) => toast("Couldn't load this page", String((e && e.message) || e), "bad"));
+          clearTimeout(t);
           c.scrollTop = keepScroll ? top : 0;
           CHARTS.forEach((f) => f());
         });
@@ -5737,6 +5915,7 @@
         : ""
     }
   </div></div>
+  ${sugCard(d.suggestions)}
 
   <div class="grid g2 mt">
     <div class="card"><div class="card-h"><div><h3>Recovery</h3><div class="sub">What your recent sessions still owe you</div></div></div>
@@ -6250,7 +6429,7 @@
       ${stepsTable(e)}
     </div>
     <div class="modal-f"><span class="grow"></span><button class="btn" data-close>Close</button></div>`,
-          { width: 520 },
+          { width: 600 },
         );
         scrollToHere(m);
       }
@@ -6300,7 +6479,7 @@
     </div>
     <div class="modal-f"><span class="grow"></span><button class="btn" data-close>Close</button>
       <button class="btn primary" onclick="closeModal();go('log')">Open training log</button></div>`,
-          { width: 520 },
+          { width: 600 },
         );
         // one view at a time: on a phone the two stacked meant the ladder pushed everything around
         const tabs = $$("#prTabs [data-tab]");
@@ -6521,6 +6700,7 @@
     .join("")}
 
   ${coachStrip(d)}
+  ${sugCard(d.suggestions, true)}
 
   ${
     lead
@@ -6698,6 +6878,12 @@
       // ---- plan: the week you are in comes first; the controls that rebuild it live at the bottom
       MPAGES.plan = async (c) => {
         const d = await call("plan");
+        OUTLOOK.base = await call("what_if", {});
+        OUTLOOK.cur = null;
+        const MTPLS = (await call("templates")).items;
+        SCN = (await call("scenarios")).items;
+        GOALS = (await call("goals")).items;
+        TPLS = Object.fromEntries(MTPLS.map((t) => [t.uid, t]));
         const cur = d.weeks.find((w) => w.current);
         if (WEEK == null || WEEK >= d.weeks.length) WEEK = cur ? cur.i : 0;
         const maxH = Math.max(...d.weeks.map((w) => Math.max(w.hours, w.done)), 1);
@@ -6706,6 +6892,7 @@
           doneN = allS.filter((s) => s.done).length;
         const pct = w.hours ? Math.min(100, (w.done / w.hours) * 100) : 0;
         c.innerHTML = `<div class="page">
+  ${orphanCard(d)}${adaptCard(d)}
   <div class="mday"><b>${esc(w.range)}</b><span>Week ${WEEK + 1} of ${d.weeks.length}</span></div>
 
   <div class="mcard"><div class="p">
@@ -6716,14 +6903,19 @@
         <div class="small muted" style="margin-top:4px">${esc(w.focus)}</div></div>
       <button class="icon-btn" id="nextW" ${WEEK < d.weeks.length - 1 ? "" : "disabled"} aria-label="Next week">${I("right")}</button></div>
     <div class="bar" style="height:8px;margin:12px 0 7px"><i style="width:${pct}%;background:${pct >= 90 ? "var(--ok)" : "var(--brand)"}"></i></div>
-    <div class="row small muted" style="justify-content:space-between"><span>${w.done} of ${w.hours} h · ${doneN}/${allS.length} sessions</span><span>${w.tss} TSS</span></div>
-    ${!w.current && cur ? `<button class="btn sm" id="toNow" style="margin-top:10px;width:100%;justify-content:center">Back to this week</button>` : ""}
+    <div class="row small muted" style="justify-content:space-between"><span>${w.done} of ${w.hours} h · ${doneN}/${allS.length} sessions</span><span>${w.mode !== "Normal" ? `<b>${esc(w.mode)}</b> · ` : ""}${w.budget_h ? `${w.budget_h} h budget · ` : ""}${w.tss} TSS</span></div>
+    <div class="row wrap" style="gap:8px;margin-top:10px"><button class="btn sm grow" id="weekB" style="justify-content:center">${I("cal")}Set week</button><button class="btn sm grow" id="copyW" style="justify-content:center">${I("list")}Copy week</button>
+      ${!w.current && cur ? `<button class="btn sm grow" id="toNow" style="justify-content:center">This week</button>` : ""}</div>
   </div></div>
 
-  <div class="msec"><h3>Days</h3><div class="mdays">${w.days
+  ${OUTLOOK.base && OUTLOOK.base.base ? `<div class="mcard"><div class="p small" id="olText"></div></div>` : ""}
+  <div class="mcard"><div class="p"><div class="row" style="justify-content:space-between;margin-bottom:8px"><b>My sessions</b><button class="btn sm primary" id="addB">${I("plus")}Add…</button></div>
+    <div class="row wrap" style="gap:8px">${tplChips(MTPLS)}</div></div></div>
+
+  <div class="msec"><h3>Days</h3><div class="small muted" style="margin:-4px 0 8px">Press and hold a session to drag it to another day. Tap a day's name to block it.</div><div class="mdays">${w.days
     .map(
-      (day) => `<div class="mday-card ${day.today ? "today" : ""}">
-    <div class="dh"><b>${day.dow}</b><span>${day.day}</span>${day.today ? "<em>Today</em>" : ""}</div>
+      (day) => `<div class="mday-card ${day.today ? "today" : ""} ${day.lock ? "locked" : ""}" ${dropAttr(day)}>
+    <div class="dh tap" data-lock="${day.date}"><b>${day.dow}</b><span>${day.day}</span>${day.lock ? `<span class="lockb">${esc(day.lock.label)}</span>` : ""}${day.today ? "<em>Today</em>" : ""}</div>
     ${
       day.sessions.length
         ? day.sessions
@@ -6731,7 +6923,7 @@
               (
                 s,
                 k,
-              ) => `<button class="msess ${s.done ? "done" : ""}" style="--c:${col(s.sport)}" data-d="${day.date}" data-k="${k}">
+              ) => `<button class="msess ${s.done ? "done" : ""}" style="--c:${col(s.sport)}" data-d="${day.date}" data-k="${k}" ${dragAttr(s, day)}>
       <div class="row" style="gap:7px">${badge(s.sport)}${s.dur_s ? `<span class="small muted">${esc(s.dur)} · ${s.tss} TSS</span>` : ""}
         <span class="grow"></span>${s.done ? `<span class="check">${I("check")}</span>` : I("right")}</div>
       <p>${esc(s.desc)}</p></button>`,
@@ -6757,13 +6949,15 @@
       <div class="small muted" style="margin-top:8px">Bar height = planned hours, solid fill = done. Tap a week to open it.</div>`,
       "planshape",
     )}
+    ${mfold("Scenarios", SCN.length ? `${SCN.length} saved` : "Compare versions of the plan", scnCard(SCN), "scenarios")}
+    ${mfold("Calendar & sharing", "Export, share", shareCard(), "plansharing")}
+    ${mfold("Goals", GOALS.length ? `${GOALS.length} set` : "Beyond race day", goalCard(GOALS) + `<button class="btn mwide" id="goalNew" style="margin-top:10px">${I("plus")}Add a goal</button>`, "goals")}
     ${mfold(
       "Plan setup",
-      d.target ? `Building to ${d.target.name}` : "No goal race set",
+      d.building.kind === "open" ? "Nothing to build toward yet" : `Building to ${d.building.label}`,
       `<label class="field" style="margin-bottom:12px"><span>Build to</span>
-        <select class="input" id="planRace"><option value="0">Auto (next A race)</option>
-          ${d.races.map((r) => `<option value="${r.id}" ${r.id === d.plan_race ? "selected" : ""}>${esc(r.name)} (${r.priority})</option>`).join("")}</select></label>
-      <button class="btn primary mwide" onclick="editScheduled()">${I("plus")}Schedule a session</button>
+        <select class="input" id="planRace">${targetOptions(d)}</select></label>
+      <button class="btn mwide" id="tuneB">${I("edit")}Shape my plan…</button>
       <button class="btn mwide" onclick="go('profile')">${I("edit")}Plan settings</button>
       <button class="btn mwide" id="restart">${I("refresh")}Restart from this week</button>`,
       "plansetup",
@@ -6772,6 +6966,7 @@
         wirePlan(d, w, cur);
       };
       function wirePlan(d, w, cur) {
+        planWire(d, w);
         $$("#content .mfold").forEach((f) => {
           f.open = store.get("fold." + f.dataset.fold, false);
           f.addEventListener("toggle", () => store.set("fold." + f.dataset.fold, f.open));
@@ -6780,14 +6975,15 @@
           (el) =>
             (el.onclick = () => {
               WEEK = +el.dataset.i;
+              PMONTH = null;
               render(true);
             }),
         );
-        $("#prevW").onclick = () => {
+        if ($("#prevW")) $("#prevW").onclick = () => {
           WEEK--;
           render(true);
         };
-        $("#nextW").onclick = () => {
+        if ($("#nextW")) $("#nextW").onclick = () => {
           WEEK++;
           render(true);
         };
@@ -6796,12 +6992,7 @@
             WEEK = cur.i;
             render(true);
           };
-        $("#planRace").onchange = async (e) => {
-          await call("set_plan_race", +e.target.value);
-          WEEK = null;
-          toast("Plan rebuilt");
-          refreshAll();
-        };
+        $("#planRace").onchange = (e) => pickTarget(e.target.value);
         $("#restart").onclick = async () => {
           if (
             await confirmBox(
@@ -6948,6 +7139,7 @@
   </div>
 
   ${coachStrip(d)}
+  ${sugCard(d.suggestions)}
 
   <div class="grid g-main mt">
     <div class="card"><div class="card-h"><div><h3>Performance management</h3><div class="sub">Fitness, fatigue and form. Dashed lines project your plan${d.target ? " to " + esc(d.target.name) : ""}; flags mark races.</div></div>
@@ -7845,11 +8037,13 @@
         const sports = IV_SPORTS.filter((s) => BOOT.sports.includes(s)),
           opts = sports.length ? sports : IV_SPORTS;
         if (!opts.includes(cfg.sport)) cfg.sport = opts[0];
+        const saved = (await call("templates")).items;
         c.innerHTML = `<div class="page"><div class="card" style="max-width:560px;margin:0 auto">
     <div class="card-h"><div><h3>Interval workout</h3><div class="sub">Set the session up once. It times every rep and rest and beeps you through it, with or without GPS.</div></div></div>
     <form class="card-b" id="ivF">
       <div class="seg" style="margin-bottom:12px">${opts.map((s) => `<label><input type="radio" name="sport" value="${s}" ${s === cfg.sport ? "checked" : ""}><span><i class="dot" style="--c:${col(s)}"></i>${s}</span></label>`).join("")}</div>
       <div class="row wrap" style="gap:6px;margin-bottom:14px">${IV_PRESETS.map(([n], i) => `<button type="button" class="btn sm" data-pre="${i}">${n}</button>`).join("")}</div>
+      ${saved.length ? `<div class="small muted" style="margin:-6px 0 6px">Saved</div><div class="row wrap" style="gap:6px;margin-bottom:14px">${saved.map((t, i) => `<button type="button" class="btn sm" data-saved="${i}">${esc(t.name)}</button>`).join("")}</div>` : ""}
       <div class="form-grid">
         <label class="field"><span>Reps</span><input name="reps" type="number" min="1" max="99" value="${cfg.reps}"></label>
         <div class="field"><span>Each rep is</span><div class="seg"><label><input type="radio" name="by" value="dist" ${cfg.by === "dist" ? "checked" : ""}><span>A distance</span></label><label><input type="radio" name="by" value="time" ${cfg.by === "time" ? "checked" : ""}><span>A time</span></label></div></div>
@@ -7869,6 +8063,7 @@
       </div>
       <div class="small muted" style="margin:12px 0">${cfg.by === "dist" ? "Tap Lap (or press space) as you cross the line to end each rep. Rests and the warm-up run themselves." : "Reps and rests run themselves; just follow the beeps."} The last 3 seconds of each step are beeped in.</div>
       <button type="submit" class="btn primary" style="width:100%;height:52px;font-size:16px">${I("play")}Start</button>
+      <button type="button" class="btn" id="ivSave" style="width:100%;margin-top:8px">Save as a session for my plan</button>
     </form></div></div>`;
         const f = $("#ivF");
         $$("#ivF [data-pre]").forEach(
@@ -7879,6 +8074,30 @@
               render(true);
             }),
         );
+        $$("#ivF [data-saved]").forEach(
+          (b) =>
+            (b.onclick = () => {
+              IV.cfg = { ...IV_DEFAULT, ...saved[+b.dataset.saved].cfg };
+              render(true);
+            }),
+        );
+        $("#ivSave").onclick = () => {
+          const c2 = ivReadForm(f);
+          modal(
+            `<div class="modal-h"><h3>Save this session</h3><button class="icon-btn" data-close>${I("x")}</button></div>
+    <div class="modal-b"><label class="field"><span>Name</span><input class="input" id="tplName" maxlength="40" placeholder="Tuesday 400s"></label></div>
+    <div class="modal-f"><span class="grow"></span><button class="btn" data-close>Cancel</button><button class="btn primary" id="tplOk">Save</button></div>`,
+            { width: 420 },
+          );
+          $("#tplName").focus();
+          $("#tplOk").onclick = async () => {
+            const r = await call("save_template", { name: $("#tplName").value, cfg: c2 });
+            if (!r.ok) return toast("Could not save", r.error, "bad");
+            closeModal();
+            toast("Saved", "Find it under My sessions on the Training plan page.");
+            render(true);
+          };
+        };
         $$("#ivF input[name=sport], #ivF input[name=by]").forEach(
           (x) =>
             (x.onchange = () => {
@@ -8130,10 +8349,838 @@
         };
       };
 
+      // ------------------------------------------------------------------ plan: drag a session, watch race day move
+      const clk = (s) => {
+        s = Math.round(Math.abs(s));
+        const h = Math.floor(s / 3600),
+          m = Math.floor((s % 3600) / 60),
+          p = (n) => String(n).padStart(2, "0");
+        return h ? `${h}:${p(m)}:${p(s % 60)}` : `${m}:${p(s % 60)}`;
+      };
+      const sgn = (v, f = (n) => n) => (v > 0 ? "+" : v < 0 ? "−" : "±") + f(Math.abs(v));
+      const OUTLOOK = { base: null, cur: null };
+      const PD = { st: null, hud: null, timer: 0, seq: 0, last: 0, ready: false };
+      let PLANRANGE = { min: "", max: "" },
+        PMONTH = null;
+      const weekOf = (d, date) => d.weeks.find((w) => w.days.some((x) => x.date === date));
+      const dayOf = (d, date) => d.weeks.flatMap((w) => w.days).find((x) => x.date === date);
+      // only upcoming, unfinished sessions the plan can name move; only upcoming days without a race take them
+      const dragAttr = (s, day) =>
+        s.ref && !s.done && !day.past && s.sport !== "Race" && s.sport !== "Rest" ? `data-ref="${esc(s.ref)}"` : "";
+      const dropAttr = (day) =>
+        !day.past && !day.sessions.some((s) => s.sport === "Race")
+          ? `data-date="${day.date}" data-drop data-label="${day.dow} ${day.day}"`
+          : "";
+
+      const outlookLine = (b) =>
+        `On race day: form ${sgn(b.tsb_race)} · fitness ${b.ctl_race}${b.finish_s ? ` · predicted finish ${clk(b.finish_s)}` : ""}`;
+      function outlookPaint() {
+        const b = OUTLOOK.base && OUTLOOK.base.base,
+          n = OUTLOOK.cur && OUTLOOK.cur.new;
+        if (!b) return;
+        if ($("#olText")) $("#olText").textContent = outlookLine(n || b);
+        const el = $("#olChart");
+        if (!el) return;
+        const set = (src, tag, ghost) =>
+          [
+            ["Fitness", "#00a3ff", "ctl"],
+            ["Fatigue", "#f0387c", "atl"],
+            ["Form", "#f5b400", "tsb"],
+          ].map(([name, color, k]) => ({ name: name + tag, color, data: src[k], ghost, thin: k !== "ctl" }));
+        lineChart(el, {
+          labels: (n || b).labels,
+          series: n ? [...set(b, " (before)", true), ...set(n, "", false)] : set(b, "", false),
+          height: MOBILE ? 150 : 150,
+          zero: true,
+          tipfmt: (v) => v.toFixed(1),
+        });
+      }
+      function planHud(html) {
+        if (!PD.hud) {
+          PD.hud = document.createElement("div");
+          PD.hud.className = "pdhud";
+          document.body.append(PD.hud);
+        }
+        PD.hud.innerHTML = html;
+        PD.hud.style.display = html ? "block" : "none";
+      }
+      function planDelta(wi, zone) {
+        const dl = wi.delta,
+          bits = [];
+        if (dl) {
+          bits.push(`form ${sgn(dl.form)}`);
+          if (dl.finish_s != null)
+            bits.push(
+              Math.abs(dl.finish_s) < 1
+                ? "finish unchanged"
+                : `finish <span style="color:var(${dl.finish_s < 0 ? "--ok" : "--bad"})">${sgn(dl.finish_s, clk)}</span>`,
+            );
+        }
+        const wk = (wi.weekly || [])[0],
+          top = wk ? Math.max(...wk.base, ...wk.new, 1) : 1,
+          hardTxt = wk && wk.hard[0].join() !== wk.hard[1].join() ? `<div class="small">Hard days: ${esc(wk.hard[0].join(", ") || "none")} → ${esc(wk.hard[1].join(", ") || "none")}</div>` : "";
+        return `<b>${esc(zone.dataset.label)}</b>${bits.length ? " · " + bits.join(" · ") : " · no race to project to"}${wi.quiet ? `<div class="small">No real change to race day: this is about how the week feels.</div>` : ""}
+          ${wk ? `<div class="mini" title="${esc(wk.label)}: load by day">${wk.new.map((v, i) => `<i style="height:${Math.max(2, Math.round((v / top) * 28))}px;opacity:${wk.base[i] === v ? 0.45 : 1}"></i>`).join("")}</div>${hardTxt}` : ""}${wi.warnings.map((w) => `<div class="w">${esc(w)}</div>`).join("")}`;
+      }
+      function planPreview(ref, zone, tpl) {
+        clearTimeout(PD.timer);
+        const q = ++PD.seq;
+        if (!zone) {
+          OUTLOOK.cur = null;
+          planHud("");
+          return outlookPaint();
+        }
+        PD.timer = setTimeout(async () => {
+          try {
+            const t = tpl && TPLS[tpl],
+              edit = t
+                ? { ref: "", date: zone.dataset.date, sport: t.sport, dur_s: t.dur_s, tss: t.tss, desc: t.desc }
+                : { ref, date: zone.dataset.date };
+            const wi = await call("what_if", { edits: [edit] });
+            if (q !== PD.seq) return;
+            OUTLOOK.cur = wi;
+            outlookPaint();
+            planHud(planDelta(wi, zone));
+          } catch {}
+        }, 120);
+      }
+      // run an engine change on the plan and offer to take it back
+      async function planDo(method, args, msg) {
+        const r = await call(method, ...args);
+        if (!r.ok) return toast("Couldn't do that", r.error || "", "bad");
+        const run = async () => {
+          if (LAST_UNDO === run) LAST_UNDO = null;
+          const u = await call("undo", r.undo);
+          u.ok ? toast("Undone") : toast("Could not undo", u.error, "bad");
+          render(true);
+        };
+        if (r.undo) {
+          LAST_UNDO = run;
+          toast(msg, "", "ok", { label: "Undo", run });
+        } else toast(msg);
+        render(true);
+        return r;
+      }
+      // after a drop: offer to un-bunch hard sessions the move left on back-to-back days
+      async function planSpacing() {
+        const r = await call("spacing_fixes"),
+          f = r.items && r.items[0];
+        if (f)
+          toast("Hard sessions back to back", `Move ${f.text}?`, "warn", {
+            label: "Fix it",
+            run: () => planDo("apply_change", [f.change], "Spacing fixed"),
+          });
+      }
+      function planDragInit() {
+        if (PD.ready) return;
+        PD.ready = true;
+        const SEL = ".sess[data-ref], .msess[data-ref], .pm-chip[data-ref], .tpl[data-tpl]",
+          ZONE = "[data-drop]";
+        const scroller = (el) => {
+          for (let p = el.parentElement; p; p = p.parentElement)
+            if (/(auto|scroll)/.test(getComputedStyle(p).overflowY) && p.scrollHeight > p.clientHeight) return p;
+          return document.scrollingElement;
+        };
+        const place = () => {
+          const st = PD.st;
+          st.ghost.style.left = st.x - st.dx + "px";
+          st.ghost.style.top = st.y - st.dy + "px";
+        };
+        const over = () => {
+          const st = PD.st,
+            z = (document.elementFromPoint(st.x, st.y) || document.body).closest(ZONE);
+          if (z === st.zone) return;
+          if (st.zone) st.zone.classList.remove("drop");
+          st.zone = z;
+          if (z && z.dataset.date !== st.from) {
+            z.classList.add("drop");
+            planPreview(st.ref, z, st.tpl);
+          } else planPreview(null);
+        };
+        const begin = () => {
+          const st = PD.st;
+          if (!st || st.on) return;
+          st.on = true;
+          clearTimeout(st.t);
+          const r = st.el.getBoundingClientRect(),
+            g = st.el.cloneNode(true);
+          st.dx = st.x - r.left;
+          st.dy = st.y - r.top;
+          g.classList.add("drag-ghost");
+          g.removeAttribute("data-ref");
+          g.style.width = r.width + "px";
+          document.body.append(g);
+          st.ghost = g;
+          st.el.classList.add("dragging");
+          document.body.classList.add("dragging-plan");
+          if (navigator.vibrate) navigator.vibrate(8);
+          place();
+          over();
+        };
+        const cleanup = () => {
+          const st = PD.st;
+          if (!st) return;
+          clearTimeout(st.t);
+          if (st.ghost) st.ghost.remove();
+          st.el.classList.remove("dragging");
+          if (st.zone) st.zone.classList.remove("drop");
+          document.body.classList.remove("dragging-plan");
+          PD.st = null;
+          if (st.on) planPreview(null);
+        };
+        document.addEventListener("pointerdown", (e) => {
+          const el = PD.st || e.button > 0 ? null : e.target.closest(SEL);
+          if (!el) return;
+          const st = (PD.st = {
+            el,
+            ref: el.dataset.ref || null,
+            tpl: el.dataset.tpl || null,
+            from: el.dataset.d || "",
+            id: e.pointerId,
+            x: e.clientX,
+            y: e.clientY,
+            x0: e.clientX,
+            y0: e.clientY,
+            touch: e.pointerType !== "mouse",
+            on: false,
+            zone: null,
+          });
+          if (st.touch) st.t = setTimeout(begin, 350); // a finger needs a long press, or the page could never scroll
+        });
+        document.addEventListener("pointermove", (e) => {
+          const st = PD.st;
+          if (!st || e.pointerId !== st.id) return;
+          st.x = e.clientX;
+          st.y = e.clientY;
+          if (!st.on) {
+            if (Math.hypot(st.x - st.x0, st.y - st.y0) < (st.touch ? 10 : 5)) return;
+            if (st.touch) return cleanup(); // moved before the long press: that is a scroll
+            begin();
+          }
+          place();
+          over();
+          const sc = (st.sc = st.sc || scroller(st.el));
+          if (st.y < 80) sc.scrollTop -= 14;
+          else if (st.y > innerHeight - 80) sc.scrollTop += 14;
+        });
+        const finish = async (e) => {
+          const st = PD.st;
+          if (!st || e.pointerId !== st.id) return;
+          const go = st.on && e.type === "pointerup" && st.zone && st.zone.dataset.date !== st.from,
+            { ref, tpl } = st,
+            date = st.zone && st.zone.dataset.date;
+          if (st.on) PD.last = Date.now();
+          cleanup();
+          if (go) {
+            await (tpl
+              ? planDo("add_template", [tpl, date], "Session added")
+              : planDo("move_session", [ref, date], "Session moved"));
+            planSpacing();
+          }
+        };
+        document.addEventListener("pointerup", finish);
+        document.addEventListener("pointercancel", finish);
+        document.addEventListener("keydown", (e) => e.key === "Escape" && cleanup());
+        document.addEventListener("contextmenu", (e) => PD.st && e.preventDefault());
+        document.addEventListener("touchmove", (e) => PD.st && PD.st.on && e.preventDefault(), { passive: false });
+        // the click that ends a drag must not open the session
+        document.addEventListener(
+          "click",
+          (e) => {
+            if (Date.now() - PD.last < 350) {
+              e.stopPropagation();
+              e.preventDefault();
+            }
+          },
+          true,
+        );
+      }
+      function lockSheet(day) {
+        const cur = day.lock;
+        let kind = cur ? cur.kind : "busy";
+        modal(
+          `<div class="modal-h"><div><h3>${esc(shortDate(day.date))}</h3><div class="sub">The plan moves its own sessions off a blocked day. Anything you placed yourself stays.</div></div><button class="icon-btn" data-close>${I("x")}</button></div>
+    <div class="modal-b"><div class="seg" id="lockK">${[
+      ["off", "Day off"],
+      ["travel", "Travelling"],
+      ["busy", "Busy"],
+      ["event", "Life event"],
+    ]
+      .map(([k, l]) => `<button type="button" data-k="${k}" class="${k === kind ? "on" : ""}">${l}</button>`)
+      .join("")}</div>
+      <label class="field" style="margin-top:12px"><span>Note <span class="faint" style="font-weight:400">optional</span></span><input class="input" id="lockN" maxlength="80" value="${esc(cur ? cur.note : "")}"></label></div>
+    <div class="modal-f">${cur ? `<button class="btn danger" id="lockDel">Unblock</button>` : ""}<span class="grow"></span><button class="btn" data-close>Cancel</button><button class="btn primary" id="lockSave">${I("check")}Save</button></div>`,
+          { width: 460 },
+        );
+        $$("#lockK button").forEach(
+          (b) =>
+            (b.onclick = () => {
+              kind = b.dataset.k;
+              $$("#lockK button").forEach((x) => x.classList.toggle("on", x === b));
+            }),
+        );
+        $("#lockSave").onclick = () => {
+          const note = $("#lockN").value;
+          closeModal();
+          planDo("set_lock", [day.date, kind, note], "Day blocked");
+        };
+        if ($("#lockDel"))
+          $("#lockDel").onclick = () => {
+            closeModal();
+            planDo("delete_lock", [day.date], "Day unblocked");
+          };
+      }
+      function monthHtml(d) {
+        const days = new Map(d.weeks.flatMap((w) => w.days).map((x) => [x.date, x]));
+        if (!PMONTH) PMONTH = d.weeks[WEEK].days[3].date.slice(0, 7);
+        const [y, m] = PMONTH.split("-").map(Number),
+          lead = (new Date(y, m - 1, 1).getDay() + 6) % 7,
+          n = Math.ceil((lead + new Date(y, m, 0).getDate()) / 7) * 7;
+        const cells = Array.from({ length: n }, (_, i) => {
+          const dt = new Date(y, m - 1, 1 - lead + i),
+            x = days.get(dt.toLocaleDateString("en-CA")),
+            other = dt.getMonth() === m - 1 ? "" : "other";
+          if (!x) return `<div class="pm-cell past ${other}"><div class="n">${dt.getDate()}</div></div>`;
+          return `<div class="pm-cell ${x.today ? "today" : ""} ${x.past && !x.today ? "past" : ""} ${other} ${x.lock ? "locked" : ""}" ${dropAttr(x)}>
+        <div class="n" data-lock="${x.date}"><span>${dt.getDate()}</span>${x.lock ? `<span class="lockb">${esc(x.lock.label)}</span>` : ""}</div>
+        ${x.sessions.map((s, k) => `<div class="pm-chip ${s.done ? "done" : ""}" style="--c:${col(s.sport)}" data-d="${x.date}" data-k="${k}" ${dragAttr(s, x)} title="${esc(s.desc)}">${esc(s.sport)}${s.dur_s ? " · " + s.dur : ""}</div>`).join("")}</div>`;
+        });
+        return `<div class="row" style="justify-content:space-between;margin-bottom:10px"><button class="icon-btn" id="pmPrev">${I("left")}</button>
+      <b>${new Date(y, m - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" })}</b><button class="icon-btn" id="pmNext">${I("right")}</button></div>
+      <div class="pm-grid">${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((x) => `<div class="pm-dow">${x}</div>`).join("")}${cells.join("")}</div>`;
+      }
+      let TPLS = {};
+      const tplChips = (tpls) =>
+        tpls.length
+          ? tpls
+              .map(
+                (t) =>
+                  `<div class="tpl" style="--c:${col(t.sport)}" data-tpl="${t.uid}" title="${esc(t.desc)}"><b>${esc(t.name)}</b><span>${esc(t.dur)} · ${t.tss} TSS</span></div>`,
+              )
+              .join("")
+          : `<span class="small muted">Set up an interval session once, save it, then drag it onto any day.</span>`;
+      function newSession() {
+        store.set("liveMode", "intervals");
+        IV.state = "setup";
+        go("live");
+        toast("Set the session up", "Then tap Save as a session to put it here.", "info");
+      }
+      function tplSheet(t) {
+        modal(
+          `<div class="modal-h"><div class="row">${badge(t.sport)}<b>${esc(t.name)}</b></div><button class="icon-btn" data-close>${I("x")}</button></div>
+    <div class="modal-b"><div class="row" style="gap:10px;margin-bottom:12px"><span class="pill">${I("clock")}${t.dur}</span><span class="pill">${I("bolt")}${t.tss} TSS</span></div>
+      <div>${esc(t.desc)}</div>
+      <label class="row small muted" style="gap:6px;margin-top:16px">Add to <input type="date" class="input" id="tplDay" min="${PLANRANGE.min}" max="${PLANRANGE.max}" style="width:auto;height:32px"></label></div>
+    <div class="modal-f"><button class="btn danger" id="tplDel">${I("trash")}Delete</button><span class="grow"></span><button class="btn" id="tplRun">Open in timer</button><button class="btn" data-close>Close</button></div>`,
+          { width: 460 },
+        );
+        $("#tplDay").onchange = (e) => {
+          if (!e.target.value) return;
+          closeModal();
+          planDo("add_template", [t.uid, e.target.value], "Session added");
+        };
+        $("#tplRun").onclick = () => {
+          IV.cfg = { ...IV_DEFAULT, ...t.cfg };
+          IV.state = "setup";
+          store.set("liveMode", "intervals");
+          closeModal();
+          go("live");
+        };
+        $("#tplDel").onclick = async () => {
+          closeModal();
+          deleted(await call("delete_template", t.uid), "saved session");
+        };
+      }
+      function copyWeekSheet(d, w) {
+        const to = d.weeks.filter((x) => x.i !== w.i && !x.past);
+        modal(
+          `<div class="modal-h"><div><h3>Copy this week</h3><div class="sub">Lays ${esc(w.range)} over another week. That week's own sessions step aside, and you can undo it.</div></div><button class="icon-btn" data-close>${I("x")}</button></div>
+    <div class="modal-b"><label class="field"><span>Copy onto</span><select class="input" id="copyTo">${to.map((x) => `<option value="${x.start}" ${x.i === w.i + 1 ? "selected" : ""}>${esc(x.range)} · ${x.phase}</option>`).join("")}</select></label></div>
+    <div class="modal-f"><span class="grow"></span><button class="btn" data-close>Cancel</button><button class="btn primary" id="copyGo">Copy</button></div>`,
+          { width: 460 },
+        );
+        $("#copyGo").onclick = () => {
+          const target = $("#copyTo").value;
+          closeModal();
+          planDo("copy_week", [w.start, target], "Week copied");
+        };
+      }
+      const DOWN = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+      const deltaText = (wi) =>
+        (wi.delta
+          ? `On race day: form ${sgn(wi.delta.form)} · fitness ${sgn(wi.delta.ctl)}${wi.delta.finish_s != null ? ` · finish ${Math.abs(wi.delta.finish_s) < 1 ? "unchanged" : sgn(wi.delta.finish_s, clk)}` : ""}`
+          : "No race to project to") +
+        (wi.quiet ? `<div class="small muted">That barely changes race day; it changes how the week feels.</div>` : "") +
+        wi.warnings.map((w) => `<div class="small" style="color:var(--warn)">${esc(w)}</div>`).join("");
+      // re-run what_if shortly after the last input and write the result into `el`
+      function livePreview(el, change) {
+        let t = 0,
+          q = 0;
+        return () => {
+          clearTimeout(t);
+          t = setTimeout(async () => {
+            const n = ++q;
+            try {
+              const wi = await call("what_if", change());
+              if (n === q) el.innerHTML = deltaText(wi);
+            } catch {}
+          }, 150);
+        };
+      }
+      let SCN = [];
+      function nameSheet(title, ok) {
+        modal(
+          `<div class="modal-h"><h3>${esc(title)}</h3></div>
+    <div class="modal-b"><label class="field"><span>Name</span><input class="input" id="nmI" maxlength="60" placeholder="e.g. Lighter build"></label></div>
+    <div class="modal-f"><span class="grow"></span><button class="btn" data-close>Cancel</button><button class="btn primary" id="nmGo">${I("check")}Save</button></div>`,
+          { width: 420 },
+        );
+        const go = () => {
+          const v = $("#nmI").value.trim();
+          if (!v) return;
+          closeModal();
+          ok(v);
+        };
+        $("#nmI").focus();
+        $("#nmGo").onclick = go;
+        $("#nmI").onkeydown = (e) => e.key === "Enter" && go();
+      }
+      const saveScn = (change) =>
+        nameSheet("Save as scenario", (n) => planDo("save_scenario", [n, change], "Scenario saved"));
+      const scnCard = (items) =>
+        items.length
+          ? items
+              .map(
+                (x) => `<div class="scn" data-u="${x.uid}" style="padding:10px 0;border-top:1px solid var(--border)">
+      <div class="row wrap" style="justify-content:space-between;gap:8px"><div style="min-width:0"><b>${esc(x.name)}</b><div class="small muted">${esc(x.summary)}</div></div>
+        <div class="row" style="gap:6px"><button class="btn sm scnShow">Show</button><button class="btn sm primary scnApply">Apply</button><button class="icon-btn scnDel" aria-label="Delete scenario">${I("trash")}</button></div></div>
+      <div class="small" style="margin-top:4px">${deltaText({ delta: x.delta, warnings: x.warnings })}</div></div>`,
+              )
+              .join("")
+          : `<div class="small muted">Nothing saved yet. Use Save as scenario in Tune the plan or Set this week to keep a version of the plan to compare.</div>`;
+      // one-tap fixes from the coach: each option says what it does to race day before you press it
+      const sugCard = (items, m) => {
+        SUGS = items || [];
+        if (!SUGS.length) return "";
+        const rows = items
+          .map(
+            (c, i) => `<div style="padding:10px 0;border-top:1px solid var(--border)"><b>${esc(c.title)}</b>
+        <div class="small muted">${esc(c.why)}</div>${c.options
+          .map(
+            (o, j) => `<div class="row wrap" style="gap:8px;margin-top:8px;justify-content:space-between">
+          <div class="small" style="min-width:0;flex:1">${deltaText(o)}</div>
+          <button class="btn sm primary" data-sg="${i}.${j}">${esc(o.label)}</button></div>`,
+          )
+          .join("")}</div>`,
+          )
+          .join("");
+        return m
+          ? `<div class="msec"><h3>Worth fixing</h3><div class="mcard"><div class="p" style="padding-top:0">${rows}</div></div></div>`
+          : `<div class="card mt"><div class="card-h"><div><h3>Worth fixing</h3><div class="sub">One tap each. The line under a choice is what it does to race day.</div></div></div><div class="card-b" style="padding-top:0">${rows}</div></div>`;
+      };
+      let SUGS = [];
+      document.addEventListener("click", (e) => {
+        const b = e.target.closest("[data-sg]");
+        if (!b) return;
+        const [i, j] = b.dataset.sg.split(".").map(Number);
+        planDo("apply_change", [SUGS[i].options[j].change], "Plan updated");
+      });
+      let GOALS = [];
+      const ord = (n) => n + (["th", "st", "nd", "rd"][n % 10 < 4 && ![11, 12, 13].includes(n % 100) ? n % 10 : 0]);
+      const targetOptions = (d) =>
+        `<option value="0">Auto (next A race)</option>${d.races.map((r) => `<option value="${r.id}" ${r.id === d.plan_race && !d.plan_goal ? "selected" : ""}>${esc(r.name)} (${r.priority})</option>`).join("")}` +
+        (d.goal_options.length
+          ? `<optgroup label="Goals">${d.goal_options.map((g) => `<option value="g:${g.uid}" ${g.uid === d.plan_goal ? "selected" : ""}>${esc(g.title)}</option>`).join("")}</optgroup>`
+          : "");
+      const pickTarget = async (v) => {
+        await (v.startsWith("g:") ? call("set_plan_goal", v.slice(2)) : call("set_plan_race", +v));
+        WEEK = null;
+        toast("Plan rebuilt", v.startsWith("g:") ? "It now builds toward that goal and ends with a test." : "");
+        refreshAll();
+      };
+      const goalCard = (items) =>
+        items.length
+          ? items
+              .map(
+                (g) => `<div class="goal" data-u="${g.uid}" style="padding:10px 0;border-top:1px solid var(--border)">
+      <div class="row wrap" style="justify-content:space-between;gap:8px"><div style="min-width:0"><b>${esc(g.title)}</b>${g.by_date ? ` <span class="small muted">by ${esc(g.by_date)}</span>` : ""}
+        <div class="small muted">${esc(g.start)} → ${esc(g.now)}</div></div>
+        <button class="btn sm goalBuild" ${g.building ? 'data-off="1"' : ""}>${g.building ? "Building toward this · stop" : "Build the plan toward this"}</button>
+        <button class="icon-btn goalDel" aria-label="Delete goal">${I("trash")}</button></div>
+      <div class="bar" style="height:8px;margin:8px 0 6px"><i style="width:${g.pct}%;background:${g.reached ? "var(--ok)" : "var(--brand)"}"></i></div>
+      <div class="small ${g.reached ? "" : "muted"}">${esc(g.note)}</div></div>`,
+              )
+              .join("")
+          : `<div class="small muted">No goals yet. Set one and the plan leans a little toward its sport.</div>`;
+      const GKINDS = [
+        ["ftp", "FTP", "Target watts, e.g. 280"],
+        ["run_thr_pace", "Run threshold pace", "Target pace, e.g. 4:30 (your pace units)"],
+        ["css", "Swim CSS", "Target pace per 100, e.g. 1:35 (your units)"],
+        ["time", "Time at a distance", "Target time, e.g. 40:00 or 1:35:00"],
+        ["volume", "Weekly hours", "Hours per week, e.g. 8"],
+      ];
+      function goalSheet() {
+        modal(
+          `<div class="modal-h"><div><h3>New goal</h3><div class="sub">Progress is measured from where you are today. A date is only projected once there are two weeks of change to read.</div></div><button class="icon-btn" data-close>${I("x")}</button></div>
+    <div class="modal-b"><label class="field"><span>Goal</span><select class="input" id="gK">${GKINDS.map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}</select></label>
+      <div id="gTime" style="display:none" class="row wrap" style="gap:8px"><label class="field" style="flex:1"><span>Sport</span><select class="input" id="gS"><option>Run</option><option>Bike</option></select></label>
+        <label class="field" style="flex:1"><span>Distance <span class="faint" style="font-weight:400">your units</span></span><input class="input" id="gD" inputmode="decimal" placeholder="10"></label></div>
+      <label class="field" style="margin-top:8px"><span>Target</span><input class="input" id="gT" inputmode="decimal"></label>
+      <label class="field" style="margin-top:8px"><span>By <span class="faint" style="font-weight:400">optional</span></span><input class="input" type="date" id="gB"></label></div>
+    <div class="modal-f"><span class="grow"></span><button class="btn" data-close>Cancel</button><button class="btn primary" id="gGo">${I("check")}Add goal</button></div>`,
+          { width: 460 },
+        );
+        const sync = () => {
+          const k = $("#gK").value;
+          $("#gTime").style.display = k === "time" ? "flex" : "none";
+          $("#gT").placeholder = GKINDS.find((x) => x[0] === k)[2];
+        };
+        $("#gK").onchange = sync;
+        sync();
+        $("#gGo").onclick = async () => {
+          const f = { kind: $("#gK").value, target: $("#gT").value, by_date: $("#gB").value || null };
+          if (f.kind === "time") Object.assign(f, { sport: $("#gS").value, dist: $("#gD").value });
+          const r = await call("save_goal", f);
+          if (!r.ok) return toast("Couldn't add it", r.error, "bad");
+          closeModal();
+          toast("Goal added");
+          render(true);
+        };
+      }
+      function goalWire() {
+        if ($("#goalNew")) $("#goalNew").onclick = goalSheet;
+        $$(".goal").forEach((el) => {
+          $(".goalDel", el).onclick = () => planDo("delete_goal", [el.dataset.u], "Goal deleted");
+          $(".goalBuild", el).onclick = (ev) =>
+            planDo(
+              "set_plan_goal",
+              [ev.currentTarget.dataset.off ? "" : el.dataset.u],
+              ev.currentTarget.dataset.off ? "Back to your race" : "The plan now builds toward this goal",
+            );
+        });
+      }
+      function scnWire() {
+        let shown = null;
+        $$(".scn").forEach((el) => {
+          const x = SCN.find((y) => y.uid === el.dataset.u);
+          $(".scnShow", el).onclick = async () => {
+            shown = shown === x.uid ? null : x.uid;
+            OUTLOOK.cur = shown ? await call("what_if", x.change) : null;
+            $$(".scnShow").forEach((b) => (b.textContent = b.closest(".scn") === el && shown ? "Hide" : "Show"));
+            outlookPaint();
+          };
+          $(".scnApply", el).onclick = async () => {
+            const note = x.change.race_date ? " The race date stays as it is." : "";
+            if (await confirmBox(`Apply "${x.name}"?`, `It changes your plan now, and you can undo it.${note}`, "Apply", false))
+              planDo("apply_scenario", [x.uid], "Scenario applied");
+          };
+          $(".scnDel", el).onclick = () => planDo("delete_scenario", [x.uid], "Scenario deleted");
+        });
+      }
+      const ROLES = [
+        ["rest", "Rest", "var(--muted)"],
+        ["easy", "Easy", "var(--ok)"],
+        ["key", "Hard", "var(--warn)"],
+        ["long", "Long", "var(--brand)"],
+        ["any", "Any", "var(--border)"],
+      ];
+      function tuneSheet(d) {
+        const T = d.tune || {},
+          av = d.minutes || {},
+          shape = { ...d.shape };
+        let dirty = !!d.shape_custom;
+        const num = (id, label, v, min, max, step, hint = "") =>
+          `<label class="field" style="flex:1;min-width:120px"><span>${label}${hint ? ` <span class="faint" style="font-weight:400">${hint}</span>` : ""}</span><input class="input" type="number" inputmode="decimal" id="${id}" min="${min}" max="${max}" step="${step}" value="${v}"></label>`;
+        modal(
+          `<div class="modal-h"><div><h3>Shape my plan</h3><div class="sub">Every control here changes the plan. The line at the bottom shows what it does before you save.</div></div><button class="icon-btn" data-close>${I("x")}</button></div>
+    <div class="modal-b">
+      <div class="small muted" style="margin-bottom:6px"><b style="color:var(--text)">Your week.</b> Tap a day to change what it is. Hard days get the key sessions, the long day gets the long one, and a rest day stays empty. The box under each day is the most minutes you can train that day (blank for no limit).</div>
+      <div id="shapeRow" style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px">${DOWN.map((n, i) => `<div style="text-align:center"><div class="small muted">${n}</div><button type="button" class="btn sm shp" data-wd="${i}" style="width:100%;justify-content:center;padding:0 2px"></button><input class="input av" type="number" inputmode="numeric" min="0" max="600" step="5" data-wd="${i}" value="${av[i] ?? ""}" placeholder="min" style="margin-top:4px;padding:0 4px;text-align:center"></div>`).join("")}</div>
+      <div class="small" id="shapeSum" style="margin:8px 0 2px"></div>
+      <div class="small muted" style="margin-bottom:4px">${d.shape_custom ? `<a href="#" id="shapeAuto">Go back to the automatic week</a>` : "This is the week the plan draws now. Change a day and it becomes yours."}</div>
+      <div class="small muted" style="margin:14px 0 6px"><b style="color:var(--text)">Load.</b></div>
+      <div class="row wrap" style="gap:8px">${num("tkWk", "Hours a week now", T.weekly_hours ?? d.weekly, 1, 40, 0.5)}${num("tkPk", "Hours a week at the peak", T.peak_hours ?? d.peak, 1, 40, 0.5)}
+        <label class="field" style="flex:1;min-width:160px"><span>How the hours climb</span><select class="input" id="tkRamp">${[["linear", "Steadily"], ["stepped", "In steps, every 3 weeks"], ["late", "Slow, then steep"]].map(([k, l]) => `<option value="${k}" ${T.ramp_style === k ? "selected" : ""}>${l}</option>`).join("")}</select></label></div>
+      <div class="row wrap" style="gap:8px;margin-top:8px">${num("tkRec", "Recovery week every", T.recovery_every, 0, 12, 1, "weeks, 0 = never")}${num("tkCut", "…with this much less", T.recovery_cut, 0, 60, 5, "%")}
+        <label class="field" style="flex:1;min-width:120px"><span>Strength</span><span class="row" style="gap:8px;height:36px;align-items:center"><input type="checkbox" id="tkStr" ${T.strength ? "checked" : ""}><input class="input" type="number" id="tkStrM" min="10" max="120" step="5" value="${T.strength_min}" style="width:70px"> <span class="small muted">min</span></span></label></div>
+      <label class="row small" style="gap:8px;margin:10px 0 0"><input type="checkbox" id="tkAdapt" ${T.auto_adapt !== false ? "checked" : ""}> Let the coach lower the coming weeks when I've been well under plan</label>
+      <div class="small muted" style="margin:14px 0 6px"><b style="color:var(--text)">Phases and the finish.</b></div>
+      <label class="field"><span>Peak phase lasts <b id="tkPeakV"></b> weeks</span><input type="range" id="tkPeak" min="0" max="8" value="${d.peak_weeks}"></label>
+      <label class="field" style="margin-top:8px"><span>Build starts <b id="tkBuildV"></b>% of the way in</span><input type="range" id="tkBuild" min="20" max="80" value="${Math.round(d.build_frac * 100)}"></label>
+      <div class="row wrap" style="gap:8px;margin-top:8px">
+        <label class="field" style="flex:1;min-width:120px"><span>Taper</span><select class="input" id="tkTaper">${[0, 1, 2, 3, 4, 5, 6].map((n) => `<option value="${n}" ${+T.taper_weeks === n ? "selected" : ""}>${n ? `${n} week${n > 1 ? "s" : ""}` : "Automatic"}</option>`).join("")}</select></label>
+        ${num("tkFloor", "Week before the end", T.taper_floor, 20, 100, 5, "% of peak hours")}${num("tkFinal", d.building.kind === "goal" ? "Test week" : "Race week", T.race_week_pct, 10, 100, 5, "% of peak hours")}
+        ${d.building.kind === "open" || (d.building.kind === "goal" && !d.building.date) ? num("tkLen", "Plan length", T.plan_weeks, 4, 52, 1, "weeks") : ""}</div>
+      ${d.target ? `<label class="field" style="margin-top:10px"><span>What if the race were on <span class="faint" style="font-weight:400">preview only, edit the race itself under Races</span></span><input class="input" type="date" id="tkRace" value="${esc(d.target.date)}"></label>` : ""}
+      <div class="small" id="tkOut" style="margin-top:10px;min-height:2.6em"></div></div>
+    <div class="modal-f"><button class="btn" id="tkScn">Save as scenario…</button><span class="grow"></span><button class="btn" data-close>Cancel</button><button class="btn primary" id="tkSave">${I("check")}Save</button></div>`,
+          { width: 680 },
+        );
+        const val = (id) => ($(id) && $(id).value !== "" ? +$(id).value : undefined);
+        const get = () => {
+          const availability = {};
+          $$(".av").forEach((e) => {
+            if (e.value !== "") availability[e.dataset.wd] = +e.value;
+          });
+          const f = {
+            availability,
+            build_frac: +$("#tkBuild").value / 100,
+            peak_weeks: +$("#tkPeak").value,
+            weekly_hours: val("#tkWk"),
+            peak_hours: val("#tkPk"),
+            ramp_style: $("#tkRamp").value,
+            recovery_every: val("#tkRec"),
+            recovery_cut: val("#tkCut"),
+            strength: $("#tkStr").checked,
+            auto_adapt: $("#tkAdapt").checked,
+            strength_min: val("#tkStrM"),
+            taper_weeks: +$("#tkTaper").value,
+            taper_floor: val("#tkFloor"),
+            race_week_pct: val("#tkFinal"),
+            plan_weeks: val("#tkLen"),
+          };
+          if (dirty) f.week_shape = shape;
+          Object.keys(f).forEach((k) => f[k] === undefined && delete f[k]);
+          return f;
+        };
+        const chg = () => {
+          const c = { profile: get() },
+            r = $("#tkRace");
+          if (r && r.value && r.value !== d.target.date) c.race_date = r.value;
+          return c;
+        };
+        const run = livePreview($("#tkOut"), chg);
+        const paint = () => {
+          $$(".shp").forEach((b) => {
+            const r = ROLES.find((x) => x[0] === shape[b.dataset.wd]);
+            b.textContent = r[1];
+            b.style.borderTop = `3px solid ${r[2]}`;
+          });
+          const names = (role) =>
+            DOWN.filter((_, i) => shape[i] === role)
+              .join(", ") || "none";
+          const days = DOWN.filter((_, i) => shape[i] !== "rest").length;
+          $("#shapeSum").innerHTML = `<b>${days}</b> training days · hard: ${names("key")} · long: ${names("long")} · rest: ${names("rest")}`;
+        };
+        $$(".shp").forEach(
+          (b) =>
+            (b.onclick = () => {
+              const i = ROLES.findIndex((x) => x[0] === shape[b.dataset.wd]);
+              shape[b.dataset.wd] = ROLES[(i + 1) % ROLES.length][0];
+              if (Object.values(shape).every((r) => r === "rest")) shape[b.dataset.wd] = "easy"; // at least one day to train
+              dirty = true;
+              paint();
+              run();
+            }),
+        );
+        if ($("#shapeAuto"))
+          $("#shapeAuto").onclick = async (e) => {
+            e.preventDefault();
+            closeModal();
+            await planDo("save_plan_tuning", [{ week_shape: {} }], "Back to the automatic week");
+          };
+        const sync = () => {
+          $("#tkPeakV").textContent = $("#tkPeak").value;
+          $("#tkBuildV").textContent = $("#tkBuild").value;
+          run();
+        };
+        $$(".modal-b input, .modal-b select").forEach((e) => (e.oninput = e.onchange = sync));
+        paint();
+        sync();
+        $("#tkScn").onclick = () => {
+          const c = chg();
+          closeModal();
+          saveScn(c);
+        };
+        $("#tkSave").onclick = async () => {
+          const r = await call("save_plan_tuning", get());
+          if (!r.ok) return toast("Check the settings", r.error, "bad");
+          closeModal();
+          const run = async () => {
+            if (LAST_UNDO === run) LAST_UNDO = null;
+            const u = await call("undo", r.undo);
+            u.ok ? toast("Undone") : toast("Could not undo", u.error, "bad");
+            render(true);
+          };
+          LAST_UNDO = run;
+          toast("Plan updated", "", "ok", { label: "Undo", run });
+          render(true);
+        };
+      }
+      const WMODES = [
+        ["Normal", "As generated"],
+        ["Busy", "About 30% less, key sessions stay"],
+        ["Holiday", "Easy sessions only, shorter"],
+        ["Illness", "Rest, then a graded return in the weeks after"],
+      ];
+      function weekSheet(d, w) {
+        let mode = w.mode || "Normal";
+        modal(
+          `<div class="modal-h"><div><h3>${esc(w.range)}</h3><div class="sub">Set how this week should go. Sessions you placed yourself stay as they are.</div></div><button class="icon-btn" data-close>${I("x")}</button></div>
+    <div class="modal-b"><div class="seg" id="wkM">${WMODES.map(([k]) => `<button type="button" data-k="${k}" class="${k === mode ? "on" : ""}">${k}</button>`).join("")}</div>
+      <div class="small muted" id="wkD" style="margin:6px 0 12px"></div>
+      <label class="field"><span>Hours budget <span class="faint" style="font-weight:400">optional, drops the least intense sessions first</span></span><input class="input" type="number" inputmode="decimal" min="0.5" max="40" step="0.5" id="wkB" value="${w.budget_h ?? ""}"></label>
+      <div class="small" id="wkOut" style="margin-top:10px;min-height:2.6em"></div></div>
+    <div class="modal-f"><button class="btn" id="wkScn">Save as scenario…</button><span class="grow"></span><button class="btn" data-close>Cancel</button><button class="btn primary" id="wkSave">${I("check")}Apply</button></div>`,
+          { width: 480 },
+        );
+        const budget = () => ($("#wkB").value === "" ? null : +$("#wkB").value);
+        const chg = () => ({ weeks: [{ start: w.start, mode, budget_h: budget() }] });
+        const run = livePreview($("#wkOut"), chg);
+        const sync = () => {
+          $$("#wkM button").forEach((x) => x.classList.toggle("on", x.dataset.k === mode));
+          $("#wkD").textContent = WMODES.find((x) => x[0] === mode)[1];
+          run();
+        };
+        $$("#wkM button").forEach(
+          (b) =>
+            (b.onclick = () => {
+              mode = b.dataset.k;
+              sync();
+            }),
+        );
+        $("#wkB").oninput = sync;
+        sync();
+        $("#wkScn").onclick = () => {
+          const c = chg();
+          closeModal();
+          saveScn(c);
+        };
+        $("#wkSave").onclick = () => {
+          const b = budget();
+          closeModal();
+          planDo("set_week", [w.start, mode, b], mode === "Normal" && b == null ? "Week back to normal" : "Week set");
+        };
+      }
+      const shareCard = (m) => `<div class="small muted" style="margin:0 0 10px">Put your plan in a calendar app, send it to a training partner, or add a session you do with others. Nothing leaves the device unless you share the file.</div>
+        <div class="row wrap" style="gap:8px">
+          <button class="btn sm" id="icsB">${I("cal")}Export to calendar…</button>
+          <button class="btn sm" id="shareP">${I("list")}Share this plan…</button>
+          <button class="btn sm" id="impP">${I("plus")}Open a shared plan…</button></div>`;
+      function groupSheet() {
+        modal(
+          `<div class="modal-h"><div><h3>Group session</h3><div class="sub">A session you do with other people. Who and where go into the calendar entry.</div></div><button class="icon-btn" data-close>${I("x")}</button></div>
+    <div class="modal-b"><div class="row wrap" style="gap:8px">
+        <label class="field" style="flex:1"><span>Day</span><input class="input" type="date" id="grD" min="${PLANRANGE.min}" max="${PLANRANGE.max}"></label>
+        <label class="field" style="flex:1"><span>Sport</span><select class="input" id="grS">${["Run", "Bike", "Swim", "Row", "Hike", "Walk", "Strength"].map((x) => `<option>${x}</option>`).join("")}</select></label>
+        <label class="field" style="width:96px"><span>Minutes</span><input class="input" type="number" id="grM" min="10" max="600" value="60"></label></div>
+      <label class="field" style="margin-top:8px"><span>Who and where</span><input class="input" id="grW" maxlength="120" placeholder="Saturday club ride, outside the bakery 7am"></label></div>
+    <div class="modal-f"><span class="grow"></span><button class="btn" data-close>Cancel</button><button class="btn primary" id="grGo">${I("check")}Add</button></div>`,
+          { width: 520 },
+        );
+        $("#grGo").onclick = () => {
+          const f = { date: $("#grD").value, sport: $("#grS").value, dur_s: +$("#grM").value * 60, group_info: $("#grW").value };
+          closeModal();
+          planDo("add_session", [f], "Group session added");
+        };
+      }
+      function shareWire() {
+        if ($("#icsB"))
+          $("#icsB").onclick = async () => {
+            const r = await call("export_ics", 12);
+            if (!r.cancelled) toast("Calendar file saved", "Twelve weeks of sessions, races and blocked days. Import it into any calendar app.");
+          };
+        if ($("#shareP"))
+          $("#shareP").onclick = async () => {
+            const r = await call("export_plan");
+            if (!r.cancelled) toast("Plan saved", "They can open it from Training plan, and it arrives as a scenario to review.");
+          };
+        if ($("#impP"))
+          $("#impP").onclick = async () => {
+            const r = await call("import_plan");
+            if (r.cancelled) return;
+            if (!r.ok) return toast("Couldn't open it", r.error, "bad");
+            toast("Plan added as a scenario", `Review it under Scenarios${r.templates ? `; ${r.templates} saved session${r.templates > 1 ? "s" : ""} came with it` : ""}.`);
+            render(true);
+          };
+      }
+      function addSheet(d) {
+        const tpls = Object.values(TPLS);
+        const opt = (id, icon, title, sub) =>
+          `<button type="button" class="btn" id="${id}" style="width:100%;justify-content:flex-start;height:auto;padding:10px 12px;margin-bottom:8px;text-align:left">${I(icon)}<span style="margin-left:6px"><b>${title}</b><span class="small muted" style="display:block;font-weight:400">${sub}</span></span></button>`;
+        modal(
+          `<div class="modal-h"><div><h3>Add to the plan</h3></div><button class="icon-btn" data-close>${I("x")}</button></div>
+    <div class="modal-b">${opt("adSch", "plus", "A workout", "Pick a sport, time and length. It replaces that day's plan session.")}
+      ${opt("adGrp", "user", "A group session", "Something you do with others. Who and where go into the calendar.")}
+      ${opt("adIv", "bolt", "Build an interval session", "Set up reps and rests, then save it to drag onto any day.")}
+      ${tpls.length ? `<div class="small muted" style="margin:10px 0 6px">Or a saved session</div><div class="row wrap" style="gap:8px">${tplChips(tpls)}</div>` : ""}</div>`,
+          { width: 480 },
+        );
+        $("#adSch").onclick = () => (closeModal(), editScheduled());
+        $("#adGrp").onclick = () => (closeModal(), groupSheet());
+        $("#adIv").onclick = () => (closeModal(), newSession());
+        $$(".modal .tpl").forEach((el) => (el.onclick = () => (closeModal(), tplSheet(TPLS[el.dataset.tpl]))));
+      }
+      // changes of yours that point at a session the plan no longer has (a different week shape, a new focus)
+      const orphanCard = (d) =>
+        (d.orphans || []).length
+          ? `<div class="card" style="margin-bottom:12px;border-color:var(--warn)"><div class="card-b"><b>${d.orphans.length === 1 ? "One of your changes" : `${d.orphans.length} of your changes`} no longer matches the plan.</b>
+            <div class="small muted" style="margin:4px 0 8px">The session each one moved no longer exists in the plan as you've shaped it, so they aren't applied. Discard them, or undo the change that reshaped the plan.</div>
+            ${d.orphans.map((o) => `<div class="row" style="gap:8px;justify-content:space-between;padding:4px 0"><span class="small">${esc(o.sport)} moved to ${esc(shortDate(o.date))}</span><button class="btn sm orphanDrop" data-u="${o.uid}">Discard</button></div>`).join("")}</div></div>`
+          : "";
+      const adaptCard = (d) =>
+        d.adapt ? `<div class="small muted" style="margin:0 0 10px">${esc(d.adapt.note)} You can turn this off under Shape my plan.</div>` : "";
+      function planWire(d, w) {
+        $$(".orphanDrop").forEach((b) => (b.onclick = () => planDo("resolve_orphan", [b.dataset.u], "Change discarded")));
+        planDragInit();
+        $$(".tpl").forEach((el) => (el.onclick = () => tplSheet(TPLS[el.dataset.tpl])));
+        if ($("#tplNew")) $("#tplNew").onclick = newSession;
+        if ($("#copyW")) $("#copyW").onclick = () => copyWeekSheet(d, w);
+        if ($("#tuneB")) $("#tuneB").onclick = () => tuneSheet(d);
+        if ($("#weekB")) $("#weekB").onclick = () => weekSheet(d, w);
+        if ($("#addB")) $("#addB").onclick = () => addSheet(d);
+        $$("[data-ptab]").forEach(
+          (b) =>
+            (b.onclick = () => {
+              $$("[data-ptab]").forEach((x) => x.classList.toggle("on", x === b));
+              store.set("plantab", b.dataset.ptab);
+              render(true);
+            }),
+        );
+        scnWire();
+        goalWire();
+        shareWire();
+        PLANRANGE = {
+          min: (d.weeks.flatMap((w) => w.days).find((x) => !x.past) || {}).date || "",
+          max: d.weeks[d.weeks.length - 1].days[6].date,
+        };
+        $$("[data-lock]").forEach((el) => (el.onclick = () => lockSheet(dayOf(d, el.dataset.lock))));
+        $$(".pm-chip").forEach(
+          (el) => (el.onclick = () => sessionSheet(weekOf(d, el.dataset.d), el.dataset.d, +el.dataset.k)),
+        );
+        const step = (k) => {
+          const [y, m] = PMONTH.split("-").map(Number),
+            t = new Date(y, m - 1 + k, 1);
+          PMONTH = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}`;
+          render(true);
+        };
+        if ($("#pmPrev")) {
+          $("#pmPrev").onclick = () => step(-1);
+          $("#pmNext").onclick = () => step(1);
+        }
+        $$("#pview button").forEach(
+          (b) =>
+            (b.onclick = () => {
+              store.set("planview", b.dataset.v);
+              PMONTH = null;
+              render(true);
+            }),
+        );
+        CHARTS.push(outlookPaint);
+      }
+
       // ------------------------------------------------------------------ plan
       let WEEK = null;
       PAGES.plan = async (c) => {
         const d = await call("plan");
+        OUTLOOK.base = await call("what_if", {});
+        OUTLOOK.cur = null;
+        const tpls = (await call("templates")).items;
+        SCN = (await call("scenarios")).items;
+        GOALS = (await call("goals")).items;
+        TPLS = Object.fromEntries(tpls.map((t) => [t.uid, t]));
+        const view = store.get("planview", "week");
+        const ptab = store.get("plantab", "scn");
         const cur = d.weeks.find((w) => w.current);
         if (WEEK == null || WEEK >= d.weeks.length) WEEK = cur ? cur.i : 0;
         const maxH = Math.max(...d.weeks.map((w) => Math.max(w.hours, w.done)), 1);
@@ -8142,33 +9189,51 @@
         const allS = w.days.flatMap((x) => x.sessions).filter((s) => s.sport !== "Race"),
           doneN = allS.filter((s) => s.done).length;
         c.innerHTML = `<div class="page">
-  <div class="card"><div class="card-h wrap"><div><h3>${d.target ? `Season build · ${esc(d.target.name)}` : "Rolling 12-week block"}</h3>
-      <div class="sub">${d.weeks.length} weeks · ${d.weekly} → ${d.peak} h/week · ${d.days} training days · long session ${esc(d.long_day)} · ${d.recovery ? `recovery every ${d.recovery === 3 ? "3rd" : "4th"} week` : "no recovery weeks"}
-      ${d.target ? "" : " · <b>add a race to get a peak and taper</b>"}</div></div>
-    <div class="row wrap"><label class="row small muted">Build to <select class="input" id="planRace" style="width:auto;height:32px">
-        <option value="0">Auto (next A race)</option>${d.races.map((r) => `<option value="${r.id}" ${r.id === d.plan_race ? "selected" : ""}>${esc(r.name)} (${r.priority})</option>`).join("")}</select></label>
-      <button class="btn sm primary" onclick="editScheduled()">${I("plus")}Schedule a session</button><button class="btn sm" onclick="go('profile')">${I("edit")}Plan settings</button><button class="btn sm" id="restart">${I("refresh")}Restart from this week</button></div></div>
+  ${orphanCard(d)}${adaptCard(d)}
+  <div class="grid g2">
+  <div class="card"><div class="card-h wrap"><div><h3>${d.building.kind === "race" ? `Season build · ${esc(d.building.label)}` : d.building.kind === "goal" ? `Building toward · ${esc(d.building.label)}` : `Rolling ${d.weeks.length}-week block`}</h3>
+      <div class="sub">${d.weeks.length} weeks · ${d.weekly} → ${d.peak} h/week · ${d.days} training days · long session ${esc(d.long_day)} · ${+d.recovery ? `recovery every ${ord(+d.recovery)} week` : "no recovery weeks"}
+      ${d.building.kind === "open" ? " · <b>pick a race or a goal to get a peak and a finish</b>" : ""}</div></div>
+    <div class="row wrap"><label class="row small muted">Build to <select class="input" id="planRace" style="width:auto;height:32px">${targetOptions(d)}</select></label>
+      <button class="btn sm" onclick="go('profile')">${I("edit")}Plan settings</button><button class="btn sm" id="tuneB">${I("edit")}Shape my plan…</button><button class="btn sm" id="restart">${I("refresh")}Restart from this week</button></div></div>
     <div class="card-b">${legend(phases.map((p) => [p, PHASE[p]]))}
-      <div class="phase-strip" style="height:160px">${d.weeks
+      <div class="phase-strip" style="height:124px">${d.weeks
         .map(
           (
             x,
           ) => `<div class="wk ${x.i === WEEK ? "sel" : ""} ${x.current ? "cur" : ""}" data-i="${x.i}" title="${esc(x.range)} · ${x.phase} · ${x.hours} h planned, ${x.done} h done${x.races.length ? " · " + esc(x.races.join(", ")) : ""}">
       <div class="flag">${x.races.length ? I("flag") : ""}</div>
-      <div class="col" style="--c:${PHASE[x.phase]};height:${Math.max(4, (x.hours / maxH) * 118)}px"><i style="height:${Math.min(100, (x.done / (x.hours || 1)) * 100)}%"></i></div><small>${x.current ? "Now" : x.label}</small></div>`,
+      <div class="col" style="--c:${PHASE[x.phase]};height:${Math.max(4, (x.hours / maxH) * 82)}px"><i style="height:${Math.min(100, (x.done / (x.hours || 1)) * 100)}%"></i></div><small>${x.current ? "Now" : x.label}</small></div>`,
         )
         .join("")}</div>
       <div class="small muted" style="margin-top:8px">Bar height = planned hours · solid fill = hours completed · flag = race week. Click a week to open it.</div></div></div>
 
-  <div class="card mt"><div class="card-h wrap"><div class="row"><button class="icon-btn" id="prevW" ${WEEK ? "" : "disabled"}>${I("left")}</button>
-      <div><h3>Week ${WEEK + 1} of ${d.weeks.length} · ${esc(w.range)}</h3><div class="sub">${esc(w.focus)}</div></div><button class="icon-btn" id="nextW" ${WEEK < d.weeks.length - 1 ? "" : "disabled"}>${I("right")}</button></div>
-    <div class="row wrap"><span class="badge" style="--c:${PHASE[w.phase]}"><i></i>${w.phase}</span><span class="pill">${w.hours} h planned</span><span class="pill ${w.done >= w.hours * 0.9 ? "ok" : ""}">${w.done} h done</span><span class="pill">${w.tss} TSS</span><span class="pill">${doneN}/${allS.length} sessions</span>
-      <button class="btn sm" id="remakeW">${I("refresh")}Remake this week</button>
-      ${!w.current && cur ? `<button class="btn sm" id="toNow">This week</button>` : ""}</div></div>
-    <div class="card-b"><div class="cal">${w.days
+  ${
+    OUTLOOK.base && OUTLOOK.base.base
+      ? `<div class="card"><div class="card-h"><div><h3>Race-day outlook</h3><div class="sub" id="olText"></div></div></div>
+    <div class="card-b"><div id="olChart"></div>${legend([["Fitness", "#00a3ff"], ["Fatigue", "#f0387c"], ["Form", "#f5b400"]])}
+      <div class="small muted" style="margin-top:6px">Drag a session onto another day and this shows what it does to race day, before you let go.</div></div></div>`
+      : ""
+  }
+  </div>
+
+  <div class="card mt"><div class="card-h wrap"><div class="row">${view === "week" ? `<button class="icon-btn" id="prevW" ${WEEK ? "" : "disabled"}>${I("left")}</button>` : ""}
+      <div><h3>${view === "week" ? `Week ${WEEK + 1} of ${d.weeks.length} · ${esc(w.range)}` : "Calendar"}</h3><div class="sub">${view === "week" ? esc(w.focus) : "Drag a session to another day. Click a day's number to block it."}</div></div>${view === "week" ? `<button class="icon-btn" id="nextW" ${WEEK < d.weeks.length - 1 ? "" : "disabled"}>${I("right")}</button>` : ""}</div>
+    <div class="row wrap">${
+      view === "week"
+        ? `<span class="badge" style="--c:${PHASE[w.phase]}"><i></i>${w.phase}</span><span class="pill">${w.hours} h planned</span><span class="pill ${w.done >= w.hours * 0.9 ? "ok" : ""}">${w.done} h done</span><span class="pill">${w.tss} TSS</span><span class="pill">${doneN}/${allS.length} sessions</span>${w.mode !== "Normal" ? `<span class="pill warn">${esc(w.mode)}</span>` : ""}${w.budget_h ? `<span class="pill">${w.budget_h} h budget</span>` : ""}`
+        : ""
+    }
+      <div class="seg" id="pview"><button type="button" data-v="week" class="${view === "week" ? "on" : ""}">Week</button><button type="button" data-v="month" class="${view === "month" ? "on" : ""}">Month</button></div>
+      <button class="btn sm primary" id="addB">${I("plus")}Add…</button>
+      ${view === "week" ? `<button class="btn sm" id="weekB">${I("cal")}Set this week…</button><button class="btn sm" id="copyW">${I("list")}Copy week…</button><button class="btn sm" id="remakeW">${I("refresh")}Remake this week</button>${!w.current && cur ? `<button class="btn sm" id="toNow">This week</button>` : ""}` : ""}</div></div>
+    <div class="card-b"><div class="row wrap" style="gap:8px;margin-bottom:12px"><span class="small muted">Drag onto a day:</span>${tplChips(tpls)}</div>${
+      view === "month"
+        ? monthHtml(d)
+        : `<div class="cal">${w.days
       .map(
-        (day) => `<div class="day ${day.today ? "today" : ""} ${day.past && !day.today ? "past" : ""}">
-      <div class="day-h"><span>${day.dow}</span><b>${day.day}</b></div>
+        (day) => `<div class="day ${day.today ? "today" : ""} ${day.past && !day.today ? "past" : ""} ${day.lock ? "locked" : ""}" ${dropAttr(day)}>
+      <div class="day-h tap" data-lock="${day.date}"><span>${day.dow}${day.lock ? ` <span class="lockb">${esc(day.lock.label)}</span>` : ""}</span><b title="Block this day">${day.day}</b></div>
       ${
         day.sessions.length
           ? day.sessions
@@ -8176,28 +9241,47 @@
                 (
                   s,
                   k,
-                ) => `<div class="sess ${s.done ? "done" : ""}" style="--c:${col(s.sport)}" data-d="${day.date}" data-k="${k}">
-        <div class="top"><span style="color:${col(s.sport)}">${esc(s.sport)}</span>${s.done ? `<span class="check">${I("check")}</span>` : ""}</div>
+                ) => `<div class="sess ${s.done ? "done" : ""}" style="--c:${col(s.sport)}" data-d="${day.date}" data-k="${k}" ${dragAttr(s, day)}>
+        <div class="top"><span style="color:${col(s.sport)}">${esc(s.sport)}${s.pinned ? ` <span class="pinI" title="Pinned">${I("target")}</span>` : ""}</span>${s.done ? `<span class="check">${I("check")}</span>` : ""}</div>
         ${s.dur_s ? `<div class="meta"><span>${s.dur}</span><span>·</span><span>${s.tss} TSS</span></div>` : ""}<p>${esc(s.desc)}</p></div>`,
               )
               .join("")
           : `<div class="small faint" style="margin:auto;text-align:center">Rest</div>`
       }</div>`,
       )
-      .join("")}</div></div></div>
+      .join("")}</div>`
+    }</div></div>
+
+  <div class="card mt"><div class="card-h wrap"><div class="seg" id="ptabs">${[
+    ["scn", `Scenarios${SCN.length ? ` · ${SCN.length}` : ""}`],
+    ["goal", `Goals${GOALS.length ? ` · ${GOALS.length}` : ""}`],
+    ["share", "Calendar & sharing"],
+  ]
+    .map(([k, l]) => `<button type="button" data-ptab="${k}" class="${ptab === k ? "on" : ""}">${l}</button>`)
+    .join("")}</div>
+    ${ptab === "goal" ? `<button class="btn sm" id="goalNew">${I("plus")}Add a goal</button>` : ""}</div>
+    <div class="card-b" style="padding-top:0">${
+      ptab === "goal"
+        ? goalCard(GOALS)
+        : ptab === "share"
+          ? shareCard()
+          : `<div class="small muted" style="margin:0 0 4px">Keep a version of the plan beside this one. Show draws it on the outlook, Apply makes it real. Save one from Tune the plan or Set this week.</div>${scnCard(SCN)}`
+    }</div></div>
   </div>`;
+        planWire(d, w);
         $$(".wk").forEach(
           (el) =>
             (el.onclick = () => {
               WEEK = +el.dataset.i;
+              PMONTH = null;
               render(true);
             }),
         );
-        $("#prevW").onclick = () => {
+        if ($("#prevW")) $("#prevW").onclick = () => {
           WEEK--;
           render(true);
         };
-        $("#nextW").onclick = () => {
+        if ($("#nextW")) $("#nextW").onclick = () => {
           WEEK++;
           render(true);
         };
@@ -8206,12 +9290,7 @@
             WEEK = cur.i;
             render(true);
           };
-        $("#planRace").onchange = async (e) => {
-          await call("set_plan_race", +e.target.value);
-          WEEK = null;
-          toast("Plan rebuilt");
-          refreshAll();
-        };
+        $("#planRace").onchange = (e) => pickTarget(e.target.value);
         $("#restart").onclick = async () => {
           if (
             await confirmBox(
@@ -8227,7 +9306,7 @@
             refreshAll();
           }
         };
-        $("#remakeW").onclick = () => {
+        if ($("#remakeW")) $("#remakeW").onclick = () => {
           const today = new Date().toLocaleDateString("en-CA"),
             open = w.days.filter((x) => x.date >= today);
           if (!open.length) return toast("That week is over", "Pick a current or upcoming week.", "bad");
@@ -8245,13 +9324,61 @@
           s = day.sessions[k];
         if (s.sport === "Race") return openRace(s.race_id);
         if (s.sched) return openBrief(s.sched);
+        const can = !!dragAttr(s, day);
         modal(`<div class="modal-h"><div class="row">${badge(s.sport)}<span class="muted small">${new Date(day.date + "T00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</span></div><button class="icon-btn" data-close>${I("x")}</button></div>
-    <div class="modal-b"><div class="row" style="gap:10px;margin-bottom:14px">${s.dur_s ? `<span class="pill">${I("clock")}${s.dur}</span><span class="pill">${I("bolt")}${s.tss} TSS</span>` : ""}<span class="badge" style="--c:${PHASE[w.phase]}"><i></i>${w.phase}</span>${s.done ? '<span class="pill ok">Completed</span>' : ""}</div>
+    <div class="modal-b"><div class="row" style="gap:10px;margin-bottom:14px">${s.dur_s ? `<span class="pill">${I("clock")}${s.dur}</span><span class="pill">${I("bolt")}${s.tss} TSS</span>` : ""}<span class="badge" style="--c:${PHASE[w.phase]}"><i></i>${w.phase}</span>${s.pinned ? '<span class="pill">Pinned</span>' : s.edited ? '<span class="pill">Changed by you</span>' : ""}${s.done ? '<span class="pill ok">Completed</span>' : ""}</div>
       <div style="font-size:14.5px;line-height:1.6">${esc(s.desc)}</div>
-      ${s.fuel.length ? `<div class="small muted" style="margin:18px 0 4px;font-weight:600;text-transform:uppercase;letter-spacing:.06em">Fueling</div>${fuelList(s.fuel)}` : ""}</div>
+      ${s.fuel.length ? `<div class="small muted" style="margin:18px 0 4px;font-weight:600;text-transform:uppercase;letter-spacing:.06em">Fueling</div>${fuelList(s.fuel)}` : ""}
+      ${
+        can
+          ? `<div class="row wrap" style="gap:8px;margin-top:18px"><button class="btn sm" id="pinS">${s.pinned ? "Unpin" : "Pin to this day"}</button><button class="btn sm" id="skipS">Skip</button>${s.edited ? `<button class="btn sm" id="resetS">Put back as planned</button>` : ""}
+        <label class="row small muted" style="gap:6px">Move to <input type="date" class="input" id="moveS" value="${day.date}" min="${PLANRANGE.min}" max="${PLANRANGE.max}" style="width:auto;height:32px"></label></div>
+        ${s.dur_s ? `<div class="row wrap" style="gap:8px;margin-top:10px"><button class="btn sm" id="varS">Alternatives</button>
+        <span class="row small muted" style="gap:6px">Only <input type="number" class="input" id="fitS" min="5" max="360" style="width:72px;height:32px"> min <button class="btn sm" id="fitGo">Fit</button></span>
+        <label class="row small muted" style="gap:6px">Copy to <input type="date" class="input" id="copyS" min="${PLANRANGE.min}" max="${PLANRANGE.max}" style="width:auto;height:32px"></label></div>` : ""}`
+          : ""
+      }</div>
     <div class="modal-f">${s.sport !== "Rest" ? `<button class="btn" id="briefS">${I("sun")}Weather & briefing</button>` : ""}<span class="grow"></span><button class="btn" data-close>Close</button>${s.dur_s ? `<button class="btn primary" id="logS">${I("check")}Log as done</button>` : ""}</div>`);
         if ($("#logS")) $("#logS").onclick = () => openWorkout(prefill(day.date, s.sport, s.dur));
         if ($("#briefS")) $("#briefS").onclick = () => openBrief(null, day.date, k);
+        if (!can) return;
+        const act = (method, args, msg) => {
+          closeModal();
+          planDo(method, args, msg);
+        };
+        $("#pinS").onclick = () => act("pin_session", [s.ref, !s.pinned], s.pinned ? "Unpinned" : "Pinned to this day");
+        $("#skipS").onclick = () => act("skip_session", [s.ref], "Session skipped");
+        if ($("#resetS")) $("#resetS").onclick = () => act("reset_session", [s.ref], "Back as planned");
+        $("#moveS").onchange = (e) => e.target.value && e.target.value !== day.date && act("move_session", [s.ref, e.target.value], "Session moved");
+        if (!$("#varS")) return;
+        $("#fitGo").onclick = () => {
+          const mins = +$("#fitS").value;
+          if (mins) act("fit_session", [s.ref, mins], `Fitted into ${mins} min`);
+        };
+        $("#copyS").onchange = (e) => e.target.value && act("copy_session", [s.ref, e.target.value], "Session copied");
+        $("#varS").onclick = async () => {
+          const r = await call("session_variants", s.ref);
+          modal(
+            `<div class="modal-h"><div><h3>Alternatives</h3><div class="sub">Each carries about the same training load as the planned ${esc(s.sport.toLowerCase())}.</div></div><button class="icon-btn" data-close>${I("x")}</button></div>
+    <div class="modal-b">${
+      r.variants.length
+        ? r.variants
+            .map(
+              (v) => `<button class="btn" data-var="${v.key}" style="display:block;width:100%;text-align:left;height:auto;padding:10px 12px;margin-bottom:8px"><b>${esc(v.label)}</b> · ${v.dur} · ${v.tss} TSS<div class="small muted" style="white-space:normal;font-weight:400">${esc(v.desc)}</div></button>`,
+            )
+            .join("")
+        : '<div class="muted">No alternative holds this session\'s load.</div>'
+    }</div>`,
+            { width: 600 },
+          );
+          $$("[data-var]").forEach(
+            (b) =>
+              (b.onclick = () => {
+                closeModal();
+                planDo("apply_variant", [s.ref, b.dataset.var], "Swapped");
+              }),
+          );
+        };
       }
 
       // ------------------------------------------------------------------ races
@@ -9132,7 +10259,7 @@
     <form class="modal-b form-grid" id="qf"><label class="field full"><span>Quote</span><textarea name="text" rows="3"></textarea></label>
       <label class="field full"><span>Who said it</span><input name="author" placeholder="Unknown"></label></form>
     <div class="modal-f"><span class="grow"></span><button class="btn" data-close>Cancel</button><button class="btn primary" id="qSave">${I("check")}Save</button></div>`,
-          { width: 520 },
+          { width: 600 },
         );
         $("#qSave").onclick = async () => {
           const r = await call("save_quote", formValues($("#qf")));
@@ -9157,7 +10284,7 @@
         c.innerHTML = `<div class="page"><form id="pf"><div class="grid g2">${d.sections
           .map(
             (s) => `<div class="card"><div class="card-h"><h3>${esc(s.title)}</h3></div>
-    <div class="card-b form-grid">${s.fields.map((f) => fieldRow(f, d.all_sports)).join("")}</div></div>`,
+    <div class="card-b form-grid">${s.fields.map((f) => fieldRow(f, d.all_sports)).join("")}${s.note ? `<div class="small muted" style="grid-column:1/-1">${esc(s.note)} <a href="#" onclick="go('plan');return false">Open it</a></div>` : ""}</div></div>`,
           )
           .join("")}
     <div class="card"><div class="card-h"><div><h3>${I("shield")} Data & backups</h3><div class="sub">Everything is stored on this ${MOBILE ? "phone" : "computer"}. Saved automatically as you go.</div></div><span class="pill ok">Last saved ${esc(saved)}</span></div>
@@ -9943,6 +11070,10 @@
                   ? h.addresses.map((a) => `<div class="addr">${esc(a)}</div>`).join("")
                   : '<div class="small">No network found. Connect to Wi-Fi.</div>'
               }</div></details>
+            <details class="manual" style="margin-top:10px"><summary class="small muted">Show your plan in a calendar app</summary>
+              <p class="small muted" style="margin:8px 0 0">Subscribe to this link in a calendar app on a device on the same Wi-Fi (Apple Calendar: File &rarr; New Calendar Subscription). It only updates while this PC is on and hosting, and Google Calendar can't reach it &mdash; for Google, export the file from the Training plan page. Anyone on your Wi-Fi with the link can read your plan.</p>
+              <div style="margin-top:6px">${(h.ics || []).map((a) => `<div class="addr" style="word-break:break-all">${esc(a)}</div>`).join("") || '<div class="small">No network found.</div>'}</div>
+              <button type="button" class="btn sm" id="icsNew" style="margin-top:8px">${I("refresh")}New link</button></details>
             <div class="row wrap" style="margin-top:12px"><span class="small muted">${h.last ? "Last incoming sync " + when(h.last) : "Nothing has synced yet"}</span>
               <span class="grow"></span><button type="button" class="btn sm" id="hubCode">${I("refresh")}New code</button></div>
             <details class="manual" style="margin-top:12px"><summary class="small muted">Hand this PC's app files to your iPhone</summary>
@@ -9998,6 +11129,12 @@
         if ($("#serveAssets"))
           $("#serveAssets").onchange = async (e) => {
             await call("serve_assets_set", e.target.checked);
+            drawHub();
+          };
+        if ($("#icsNew"))
+          $("#icsNew").onclick = async () => {
+            await call("reset_ics_token");
+            toast("New link made", "The old one has stopped working.");
             drawHub();
           };
         if ($("#hubCode"))
@@ -10198,7 +11335,7 @@
       <div class="modal-b"><div class="small muted">${esc(new Date(e.at).toLocaleString())} &middot; ${esc(e.source.label || e.source.from || "unknown")}${e.source.version ? " " + esc(e.source.version) : ""}</div>
         <pre style="white-space:pre-wrap;font-size:11.5px;margin-top:10px;max-height:40vh;overflow:auto">${esc(e.error)}</pre></div>
       <div class="modal-f"><span class="grow"></span><button class="btn" data-close>Close</button><button class="btn primary" id="errShare">${I("up")}Share</button></div>`,
-          { width: 520 },
+          { width: 600 },
         );
         $("#errShare", m).onclick = async () => {
           const r = await call("error_log_share", i);
@@ -10351,6 +11488,7 @@
     <div class="acts"><button class="btn" onclick="go('wellness')">${I("heart")}Check in</button>
       <button class="btn" onclick="openIssue()">${I("shield")}Report issue</button></div></div>
 
+  ${sugCard(d.suggestions, true)}
   <div class="mstrip">
     ${mstat("Recovery", `${rec.hours || 0}<small>h</small>`, rec.hours ? "still owed" : "all clear", recC, "plan")}
     ${mstat("Form", (L.tsb >= 0 ? "+" : "") + L.tsb, "fitness − fatigue", tsbC, "plan")}
@@ -11360,7 +12498,7 @@
           s,
           i,
         ) => `<details class="mfold mpfold" data-pf="${i}"><summary><span class="grow">${esc(s.title)}<small>${s.fields.length} setting${s.fields.length === 1 ? "" : "s"}</small></span>${I("right", "i chev")}</summary>
-      <div class="body"><div class="form-grid mpgrid">${s.fields.map((f) => fieldRow(f, d.all_sports)).join("")}</div></div></details>`,
+      <div class="body"><div class="form-grid mpgrid">${s.fields.map((f) => fieldRow(f, d.all_sports)).join("")}${s.note ? `<div class="small muted" style="grid-column:1/-1">${esc(s.note)} <a href="#" onclick="go('plan');return false">Open it</a></div>` : ""}</div></div></details>`,
       )
       .join("")}</div>
     <div class="msec"><h3>Data &amp; sync</h3>
