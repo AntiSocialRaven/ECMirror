@@ -3259,6 +3259,57 @@ def orphan_row(e):
     return dict(uid=e["uid"], date=e["date"], sport=sport)
 
 
+def fmt_dur(sec):
+    m = round(sec / 300) * 5  # to the nearest five minutes: these are targets, not measurements
+    return f"{m // 60}h{m % 60:02d}" if m >= 60 else f"{m} min"
+
+
+LONG_FLOOR = dict(Run=3600, Bike=5400, Swim=2400)  # the long session's least useful length, per sport
+LONG_CEIL = dict(Run=10800, Bike=18000, Swim=6300)  # and the most it is ever worth
+EASY_CEIL = dict(Run=5400, Bike=10800, Swim=4200)  # the most an ordinary session absorbs from a trimmed long one
+LONG_GROWTH = 1.08  # a long session builds about this much a week from the longest you have done lately
+
+
+def long_want(sport, race_s, goal):
+    """The length a sport's long session builds toward: most of the race's own time in that sport when there is a
+    race, else a solid training long one, never beyond what is worth the recovery."""
+    fl, ceil = LONG_FLOOR.get(sport, 3600), LONG_CEIL.get(sport, 7200)
+    return min(ceil, max(fl, 0.9 * race_s)) if race_s else min(ceil, fl * 1.6 if goal else fl * 1.4)
+
+
+def size_long(sessions, ifs, weeks_out, phase, hist, legsecs, goal, av):
+    """Long sessions are capped by what the athlete has recently done, grown weekly toward what the race needs; the
+    time that frees goes to the week's other sessions, so the week keeps its hours where it can."""
+    freed, room, longest = 0.0, [], {}
+    for x in sessions:
+        sport = x[1]
+        if x[2] and ifs[id(x)][0].startswith(LONG_KEYS):
+            want = long_want(sport, legsecs.get(sport, 0), goal)
+            cap = min(want, hist[sport] * LONG_GROWTH ** max(0, weeks_out)) if hist.get(sport) else want
+            cap *= 0.8 if phase == "Recovery" else 1
+            sib = max((y[2] for y in sessions if y[1] == sport and y is not x), default=0)
+            cap = max(cap, min(x[2], sib * 1.15))  # a long session stays longer than the week's ordinary ones
+            longest[sport] = max(longest.get(sport, 0), min(x[2], cap))
+            if x[2] > cap:
+                freed += x[2] - cap
+                have = f" (your longest lately is {fmt_dur(hist[sport])})" if hist.get(sport) else ""
+                x[4] += f" Length: {fmt_dur(cap)}{have}, building about 8% a week toward {fmt_dur(want)}."
+                x[2] = cap
+        else:
+            room.append(x)
+    top = lambda x: min(
+        EASY_CEIL.get(x[1], 5400),
+        0.9 * longest.get(x[1], 1e9),
+        av[x[0].weekday()] * 60 if av.get(x[0].weekday()) else 1e9,
+    )
+    room = [x for x in room if x[2] and x[2] < top(x)]
+    ask = sum(min(x[2] * 0.3, top(x) - x[2]) for x in room)
+    for x in room:
+        x[2] += min(x[2] * 0.3, top(x) - x[2]) * (min(1.0, freed / ask) if ask else 0)
+    for x in sessions:
+        x[3] = x[2] / 3600 * ifs[id(x)][1] ** 2 * 100
+
+
 def week_why(w):
     """What a week is for: the phase's aim, then the key work in it by name."""
     names = []
@@ -3625,6 +3676,11 @@ def build_plan(
             T = 1
     R = int(p.get("recovery_every", 4))
     build_n = max(1, n - T)
+    ifs, legsecs = {}, {}
+    for sg in (tpred or {}).get("segs") or []:
+        if sg["kind"] == "leg" and sg.get("secs"):
+            legsecs[sg["sport"]] = legsecs.get(sg["sport"], 0) + sg["secs"]
+    now_w = (today - ONE * today.weekday() - week0).days // 7
     weeks, seen, tkey = [], {}, {}  # tkey: which rhythm slot a session came from, so its ref ignores the weekday
     for i in range(n):
         ws = week0 + dt.timedelta(weeks=i)
@@ -3647,8 +3703,7 @@ def build_plan(
             hrs = p["weekly_hours"] + (p["peak_hours"] - p["weekly_hours"]) * lift
             ad = p.get("adapt")
             if ad and ws >= today - ONE * today.weekday():  # start from real hours
-                now_i = (today - ONE * today.weekday() - week0).days // 7
-                hrs *= ad["factor"] + (1 - ad["factor"]) * min(1.0, (i - now_i) / max(1, build_n - 1 - now_i))
+                hrs *= ad["factor"] + (1 - ad["factor"]) * min(1.0, (i - now_w) / max(1, build_n - 1 - now_w))
             peak, build = int(p.get("peak_weeks", 3)), float(p.get("build_frac", 0.45))
             phase = "Peak" if ending and out <= T + peak else "Build" if frac >= build else "Base"
             if R and (i + 1) % R == 0 and out > T + 1:
@@ -3670,6 +3725,9 @@ def build_plan(
                 d = d.format(sport=sport, **tgt)
             sessions.append([day, sport, dur, dur / 3600 * IF * IF * 100, d, None])
             tkey[id(sessions[-1])] = (key, sessions[-1])  # holding the session keeps its id from being reused
+            ifs[id(sessions[-1])] = (key, IF)
+        if phase != "Race week":
+            size_long(sessions, ifs, i - now_w, phase, p.get("long_hist") or {}, legsecs, bool(gt), av)
         sm = max(10.0, float(p.get("strength_min") or 30))
         if p.get("strength") and phase in ("Base", "Build", "Recovery", "Peak"):
             for k, off in enumerate((2, 4)[: 1 if phase in ("Peak", "Recovery") else 2]):
@@ -5703,6 +5761,12 @@ class Api:
             pp.update(goal_target=gt, goal_boost=1.6, goal_sports=[sport] if sport else gs)  # another goal's sport must not ride along
             if g["kind"] == "volume":  # a weekly-hours goal is the top of the ramp
                 pp["peak_hours"] = max(float(g["target"]), float(pp["weekly_hours"]))
+        cut = (dt.date.today() - dt.timedelta(days=56)).isoformat()
+        hist = {}
+        for r in self._workouts():
+            if r["date"] >= cut and r["dur_s"]:
+                hist[r["sport"]] = max(hist.get(r["sport"], 0), r["dur_s"])
+        pp["long_hist"] = hist
         races, info = kw.pop("races"), kw.pop("adapt_info", None)
         if pp.get("auto_adapt", True):
             base = build_plan(pp, races, ctl=series[-1][1], **dict(kw, orphans=None))[1]
