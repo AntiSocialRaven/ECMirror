@@ -2253,9 +2253,10 @@ def _efforts(rows, races, p):
                 t = _best_window(splits, km)
                 if t:
                     add((sport, key), t, w["date"], say("pr.source.block"), wid)
-            if not splits and event_window(km, sport)[1] < d <= km * 3:
-                # a longer run at this average pace means some stretch of it was at least that fast: a safe floor,
-                # and never an overstatement, so it counts until real splits show something quicker
+            if (not splits or t is None) and d > event_window(km, sport)[1]:
+                # a longer run at this average pace means some stretch of it was at least that fast, however much
+                # shorter the distance: a safe floor, never an overstatement, so it counts until real splits show
+                # something quicker. No upper cap - a 5K PR lifts the mile and 2 mile too, not just the next step
                 add((sport, key), w["dur_s"] * km / d, w["date"], say("pr.source.pace", dist=leg_label(sport, d)), wid)
             if d and counts_as(d, km, sport):  # logged as that distance: the clean case
                 adj = _scale(w["dur_s"], d, km)

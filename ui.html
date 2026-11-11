@@ -1453,6 +1453,7 @@
         width: 220px;
         height: 220px;
         display: grid;
+        grid-template: 220px / 220px;
         place-items: center;
       }
       .ru-stage > * {
@@ -1713,7 +1714,10 @@
       /* a plain PR: a card that springs up, the old time rolls away under the new one, the gain pops */
       .prm {
         position: fixed;
-        left: 50%;
+        left: 0;
+        right: 0;
+        margin-inline: auto;
+        width: max-content;
         bottom: calc(24px + env(safe-area-inset-bottom, 0px));
         z-index: 110;
         display: flex;
@@ -1730,7 +1734,6 @@
         box-shadow: var(--shadow-lg), 0 0 0 4px color-mix(in srgb, var(--c) 12%, transparent);
         overflow: hidden;
         cursor: pointer;
-        translate: -50% 0;
         animation: prm-in 0.55s cubic-bezier(0.2, 1.5, 0.4, 1) both;
       }
       html.mobile .prm {
@@ -6941,10 +6944,14 @@
       function promoteBests(list) {
         const nb = (list || []).filter((b) => !b.first);
         if (!nb.length) return;
-        const up = nb.find((b) => b.promoted);
-        return up ? rankUp(up, nb.filter((b) => b !== up)) : prMoment(nb[0], nb.length - 1);
+        const steps = [
+          ...nb.filter((b) => b.promoted).map((b) => (next) => rankUp(b, next)),
+          ...nb.filter((b) => !b.promoted).slice(0, 4).map((b) => (next) => prMoment(b, next)),
+        ];
+        const run = () => steps.shift()?.(run);
+        run();
       }
-      function rankUp(up, rest) {
+      function rankUp(up, next) {
         document.querySelector(".rankup")?.remove();
         const old = { tier: up.old_tier, div: up.old_div, colour: up.old_colour };
         const parts = Array.from({ length: 28 }, (_, i) => {
@@ -6967,7 +6974,6 @@
     <h2 class="ru-tier">${esc(up.tier)}${up.div ? " " + up.div : ""}</h2>
     <div class="ru-from">from ${esc(up.old_tier)}${up.old_div ? " " + up.old_div : ""}</div>
     <div class="ru-stat">${esc(up.label)} <b>${esc(up.time)}</b><span class="ru-gain">−<span id="ruGain">0:00</span></span></div>
-    ${rest.length ? `<div class="ru-also">Also: ${rest.map((b) => `${esc(b.label)} ${esc(b.time)}`).join(" · ")}</div>` : ""}
     <div class="ru-acts"><button class="btn" data-ru="close">Nice</button><button class="btn primary" data-ru="ranks">See ranks</button></div>`;
         $$(".ru-new .tb > path", el).slice(0, 1).forEach((p) => p.setAttribute("pathLength", "1"));
         document.body.append(el);
@@ -7000,7 +7006,7 @@
           document.removeEventListener("keydown", key);
           setTimeout(() => {
             el.remove();
-            then && then();
+            then ? then() : next && next();
           }, 250);
         };
         const key = (ev) => {
@@ -7016,9 +7022,9 @@
         setTimeout(() => $("[data-ru=close]", el)?.focus({ preventScroll: true }), 50);
         if (matchMedia("(prefers-reduced-motion: reduce)").matches) finish();
       }
-      function prMoment(b, more) {
+      function prMoment(b, next) {
         document.querySelector(".prm")?.remove();
-        const life = 6000,
+        const life = next ? 4200 : 6000,
           el = document.createElement("div");
         el.className = "prm";
         el.style.cssText = `--c:${b.colour || "var(--brand)"};--life:${life}ms`;
@@ -7026,7 +7032,7 @@
         el.innerHTML = `<div class="prm-medal" aria-hidden="true"><svg viewBox="0 0 24 24"><circle class="dial" cx="12" cy="13" r="8" pathLength="1"/><path d="M10 2h4M12 2v3M19 6l1.5-1.5"/><path class="hand" d="M12 13V8.5"/></svg></div>
     <div><div class="prm-k">New PR · ${esc(b.label)}</div>
       <div class="prm-row"><span class="prm-roll" aria-label="${esc(b.time)}, was ${esc(b.prev)}"><span><s>${esc(b.prev)}</s><b>${esc(b.time)}</b></span></span><span class="prm-gain">−${esc(b.gain)}</span></div>
-      ${more ? `<div class="prm-more">+${more} more best${more === 1 ? "" : "s"}</div>` : ""}</div>
+      </div>
     <i class="prm-shine"></i><i class="prm-bar"></i>`;
         document.body.append(el);
         navigator.userActivation?.hasBeenActive && navigator.vibrate && setTimeout(() => navigator.vibrate(20), 750);
@@ -7036,7 +7042,10 @@
         const close = () => {
           clearTimeout(t);
           el.classList.add("out");
-          setTimeout(() => el.remove(), 300);
+          setTimeout(() => {
+            el.remove();
+            next?.();
+          }, 300);
         };
         const arm = () => (t = setTimeout(close, left));
         el.onmouseenter = () => {
@@ -7048,6 +7057,7 @@
           arm();
         };
         el.onclick = () => {
+          next = null;
           close();
           if (b.wid) openWorkoutId(b.wid);
           else go("ranks");
