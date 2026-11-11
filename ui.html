@@ -9385,6 +9385,17 @@
         };
         $$(".sess").forEach((el) => (el.onclick = () => sessionSheet(w, el.dataset.d, +el.dataset.k)));
       };
+      // an interval session rep by rep: what each part is and how long it takes
+      function partsList(p) {
+        if (!p) return "";
+        return `<div style="margin-top:14px;border:1px solid var(--border);border-radius:var(--r);background:var(--well);padding:4px 12px">${p.rows
+          .map(
+            (r) =>
+              `<div style="display:flex;gap:12px;padding:8px 0;border-top:1px solid var(--border);font-size:13.5px;line-height:1.5"><b style="flex:none;width:78px">${esc(r.label)}</b><span>${esc(r.text)}</span></div>`,
+          )
+          .join("")
+          .replace("border-top:1px solid var(--border);", "")}<div class="small muted" style="padding:6px 0 8px;border-top:1px solid var(--border)">As written about ${Math.round(p.total_s / 60)} min in all.</div></div>`;
+      }
       function sessionSheet(w, date, k) {
         const day = w.days.find((x) => x.date === date),
           s = day.sessions[k];
@@ -9394,6 +9405,7 @@
         modal(`<div class="modal-h"><div class="row">${badge(s.sport)}<span class="muted small">${new Date(day.date + "T00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</span></div><button class="icon-btn" data-close>${I("x")}</button></div>
     <div class="modal-b"><div class="row" style="gap:10px;margin-bottom:14px">${s.dur_s ? `<span class="pill">${I("clock")}${s.dur}</span><span class="pill">${I("bolt")}${s.tss} TSS</span>` : ""}<span class="badge" style="--c:${PHASE[w.phase]}"><i></i>${w.phase}</span>${s.pinned ? '<span class="pill">Pinned</span>' : s.edited ? '<span class="pill">Changed by you</span>' : ""}${s.done ? '<span class="pill ok">Completed</span>' : ""}</div>
       <div style="font-size:14.5px;line-height:1.6">${esc(s.desc)}</div>
+      ${partsList(s.parts)}
       ${s.fuel.length ? `<div class="small muted" style="margin:18px 0 4px;font-weight:600;text-transform:uppercase;letter-spacing:.06em">Fueling</div>${fuelList(s.fuel)}` : ""}
       ${
         can

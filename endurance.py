@@ -3310,10 +3310,88 @@ def fmt_dur(sec):
     return f"{m // 60}h{m % 60:02d}" if m >= 60 else f"{m} min"
 
 
+SET_RE = re.compile(
+    r"(\d+)(?:-(\d+))? ?x ?(\d+)(?:-\d+)?(?: ?(min|s|m)\b)?"
+    r"(?: ?@ ?(\d+:\d\d/(?:mi|km|100m|100yd)|\d+(?:-\d+)? W))?"
+)
+REST_RE = re.compile(r"(\d+(?:\.\d+)?) ?(s|min) (?:jog|rest|easy|recover)")
+PACE_M = {"mi": 1609.344, "km": 1000.0, "100m": 100.0, "100yd": 91.44}
+WARM = dict(Run=900, Bike=900, Swim=600)
+COOL = dict(Run=600, Bike=600, Swim=300)
+
+
+def parse_sets(desc, sport):
+    """The reps in an interval session's text, timed: how long each lasts (from the pace when it is set by distance),
+    the rest, and the warm-up and cool-down around them. None when the text has no reps it can time."""
+    if re.search(r"inside an|rest Z2|otherwise|^(Long|Endurance|Easy|Shorter long)", desc):
+        return None  # the reps sit inside a longer session whose length is not theirs
+    ms = list(SET_RE.finditer(desc))
+    sets = []
+    for k, m in enumerate(ms):
+        n, n_hi, d, u, tgt = m.group(1), m.group(2), int(m.group(3)), m.group(4), m.group(5)
+        pace = tgt if tgt and ":" in tgt else None
+        pm = None
+        if pace:
+            clock, per = pace.split("/")
+            pm = parse_clock(clock) / PACE_M[per]
+        u = u or ("m" if sport == "Swim" else None)
+        if u is None or (u == "m" and pm is None) or int(n) < 1:
+            continue
+        work = d * pm if u == "m" else d * (60 if u == "min" else 1)
+        dist = d if u == "m" else (work / pm if pm else None)
+        win = desc[m.end() : ms[k + 1].start() if k + 1 < len(ms) else len(desc)].split(". ")[0]
+        r = REST_RE.search(re.sub(r"then \d+ min easy", "", win))
+        rest = float(r.group(1)) * (60 if r.group(2) == "min" else 1) if r else min(max(work, 60), 180)
+        sets.append(
+            dict(
+                n=int(n), n_hi=int(n_hi) if n_hi else None, d=d, unit=u, work_s=round(work), dist_m=dist, target=tgt,
+                pace=pace, rest_s=round(rest), rest_stated=bool(r),
+            )
+        )
+    if not sets:
+        return None
+    w = re.search(r"(\d+) min warm-up", desc)
+    e = re.search(r"then (\d+) min easy", desc)
+    warm, cool = int(w.group(1)) * 60 if w else WARM.get(sport, 900), COOL.get(sport, 600)
+    extra = int(e.group(1)) * 60 if e else 0
+    main = sum(s["n"] * (s["work_s"] + s["rest_s"]) for s in sets) - sets[-1]["rest_s"]
+    return dict(sets=sets, warm_s=warm, cool_s=cool, extra_s=extra, main_s=main, total_s=warm + main + cool + extra)
+
+
+def set_rows(desc, sport):
+    """parse_sets as lines a person can follow: what to do, rep by rep, and how long each part takes."""
+    ps = parse_sets(desc, sport)
+    if not ps:
+        return None
+    rows = [dict(label="Warm-up", text=f"{round(ps['warm_s'] / 60)} min easy, with a few strides or pick-ups")]
+    for k, s in enumerate(ps["sets"], 1):
+        n = f"{s['n']}-{s['n_hi']}" if s["n_hi"] else str(s["n"])
+        yd = bool(s["pace"]) and s["pace"].endswith("yd")
+        one = f"{s['d']} {'yd' if yd else 'm'}" if s["unit"] == "m" else hms(s["work_s"])
+        each = [f"{hms(s['work_s'])} each"] if s["unit"] == "m" else []
+        if s["unit"] != "m" and s["dist_m"] and s["pace"] and s["pace"].endswith(("mi", "km")):
+            mi = s["pace"].endswith("mi")
+            each = [f"about {s['dist_m'] / (1609.344 if mi else 1000):.2f} {'mi' if mi else 'km'} each"]
+        rest = f"{hms(s['rest_s'])} {'rest' if s['rest_stated'] else 'easy'} between"
+        whole = hms(s["n"] * (s["work_s"] + s["rest_s"]) - s["rest_s"])
+        head = f"{n} x {one}" + (f" @ {s['target']}" if s["target"] else "")
+        rows.append(
+            dict(
+                label=f"Set {k}" if len(ps["sets"]) > 1 else "Main set",
+                text=" · ".join([head, *each, rest, f"set {whole}"]),
+            )
+        )
+    if ps["extra_s"]:
+        rows.append(dict(label="Finish", text=f"{round(ps['extra_s'] / 60)} min easy"))
+    rows.append(dict(label="Cool-down", text=f"{round(ps['cool_s'] / 60)} min easy"))
+    return dict(rows=rows, total_s=ps["total_s"])
+
+
 LONG_FLOOR = dict(Run=3600, Bike=5400, Swim=2400)  # the long session's least useful length, per sport
 LONG_CEIL = dict(Run=10800, Bike=18000, Swim=6300)  # and the most it is ever worth
 EASY_CEIL = dict(Run=5400, Bike=10800, Swim=4200)  # the most an ordinary session absorbs from a trimmed long one
-LONG_GROWTH = 1.08  # a long session builds about this much a week from the longest you have done lately
+QUALITY_CEIL = dict(Run=4200, Bike=7200, Swim=4500)  # warm-up, the reps and a cool-down fit in this
+LONG_GROWTH = 1.08 # a long session builds about this much a week from the longest you have done lately
 
 
 def long_want(sport, race_s, goal):
@@ -3341,8 +3419,15 @@ def size_long(sessions, ifs, weeks_out, phase, hist, legsecs, goal, av):
                 have = f" (your longest lately is {fmt_dur(hist[sport])})" if hist.get(sport) else ""
                 x[4] += f" Length: {fmt_dur(cap)}{have}, building about 8% a week toward {fmt_dur(want)}."
                 x[2] = cap
+        elif x[2] and ifs[id(x)][1] >= 0.8:  # intervals are fixed work; time past the cool-down is filler
+            ps = parse_sets(x[4], sport)
+            q = min(QUALITY_CEIL.get(sport, 5400), av[x[0].weekday()] * 60 if av.get(x[0].weekday()) else 1e9)
+            new = min(max(ps["total_s"], 1800), q) if ps else min(x[2], q)
+            freed += x[2] - new
+            x[2] = new
         else:
             room.append(x)
+    freed = max(freed, 0.0)
     top = lambda x: min(
         EASY_CEIL.get(x[1], 5400),
         0.9 * longest.get(x[1], 1e9),
@@ -6648,6 +6733,7 @@ class Api:
                         dur_s=s[2],
                         tss=round(s[3]),
                         desc=s[4],
+                        parts=set_rows(s[4], s[1]) if s[2] else None,
                         **sess_ref(s),
                         edited=str(s[5]).startswith("e:"),
                         pinned=bool(edits.get(str(s[5])[2:], {}).get("pinned")),
