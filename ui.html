@@ -1543,6 +1543,17 @@
         color: var(--c);
         animation: ru-kick 0.6s ease-out 1.7s both;
       }
+      .ru-dist {
+        display: inline-block;
+        margin-left: 8px;
+        padding: 3px 12px;
+        border-radius: var(--r-pill);
+        background: color-mix(in srgb, var(--c) 22%, transparent);
+        border: 1px solid color-mix(in srgb, var(--c) 55%, transparent);
+        font-size: 17px;
+        letter-spacing: 0;
+        vertical-align: middle;
+      }
       .ru-tier {
         margin: 0;
         font-size: 34px;
@@ -1558,6 +1569,9 @@
       .ru-stat {
         animation-delay: 2.15s;
         margin-top: 8px;
+      }
+      .ru-stat {
+        font-size: 15px;
       }
       .ru-stat b {
         color: var(--text);
@@ -6970,7 +6984,7 @@
       <svg class="ru-ring" viewBox="0 0 120 120"><circle class="t" cx="60" cy="60" r="54"/><circle class="f" cx="60" cy="60" r="54" pathLength="1"/></svg>
       <div class="ru-old">${tierBadge(old, 96)}</div><div class="ru-flash"></div><div class="ru-shock"></div>
       <div class="ru-new">${tierBadge(up, 132)}</div>${parts}</div>
-    <div class="ru-kicker">Rank up</div>
+    <div class="ru-kicker">Rank up<span class="ru-dist">${esc(up.label)}</span></div>
     <h2 class="ru-tier">${esc(up.tier)}${up.div ? " " + up.div : ""}</h2>
     <div class="ru-from">from ${esc(up.old_tier)}${up.old_div ? " " + up.old_div : ""}</div>
     <div class="ru-stat">${esc(up.label)} <b>${esc(up.time)}</b><span class="ru-gain">−<span id="ruGain">0:00</span></span></div>
