@@ -7158,6 +7158,40 @@ class Api:
         return out[:4]
 
     @_locked
+    def status_now(self):
+        """Read-only: what the athlete's body and kit are asking for right now, one short item each, for the chips in
+        the header of every page. Each item says where to go to deal with it."""
+        today = dt.date.today()
+        rows, items = self._workouts(), []
+        rec = recovery_clock(rows, P)
+        if rec["hours"] >= 1:
+            big = rec["items"][0] if rec["items"] else None
+            more = f" The biggest part is your {big['sport']} from {big['date']}." if big else ""
+            items.append(dict(kind="recovery", text=f"Recovery {rec['hours']:g} h", go="coach", level=(
+                "bad" if rec["hours"] >= 24 else "warn" if rec["hours"] >= 8 else "ok"), until=rec["until"],
+                tip=f"Recent sessions still owe you this much.{more}"))
+        for i in active_on(self._issues(), today):
+            day = (today - dt.date.fromisoformat(i["start"])).days + 1
+            tip = "The plan swaps to cross-training." if i["sports"] else "The plan's volume and intensity are reduced."
+            items.append(dict(kind="issue", text=f"{i['name']} · day {day}", go="health", level="warn", tip=tip,
+                              issue=i["kind"]))
+        totals = self._gear_totals()
+        for g in self._gear():
+            v = self._gear_view(g, totals) if g["active"] else None
+            if v and v["warn"]:
+                left = "past" if v["warn"] == "bad" else "close to"
+                items.append(dict(kind="gear", text=f"{g['name']} {v['pct']}%", go="profile", level=v["warn"],
+                                  tip=f"{g['name']} is {left} its retire-at distance ({v['dist']} of {v['retire']})."))
+        key = (len(rows), rows[0]["id"] if rows else 0, P["run_thr_pace"], P["ftp"], P["css"], P["lthr"])
+        if key != getattr(self, "_drift_key", None):  # records() is not cheap and this runs on every page
+            self._drift_key = key
+            self._drift = threshold_drift(P, records(rows, self._races(forecast=False), P)) if rows else []
+        for x in self._drift:
+            items.append(dict(kind="drift", text=f"{x['what']} may be low", go="coach", level="info",
+                              tip=f"{x['why']} Suggested: {x['suggested']} (now {x['now']})."))
+        return dict(ok=True, items=items)
+
+    @_locked
     def export_ics_text(self, weeks=12):
         """The plan for the next `weeks` weeks as an iCalendar file. A session's UID comes from its plan ref, so
         importing it again updates the calendar entry instead of duplicating it."""

@@ -320,6 +320,41 @@
         font-weight: 650;
         letter-spacing: -0.02em;
       }
+      .stat-chips {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 6px;
+        padding: 0 16px;
+        overflow: hidden;
+      }
+      .stat-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        height: 26px;
+        padding: 0 11px 0 9px;
+        flex: none;
+        font: inherit;
+        font-size: 12px;
+        color: var(--text);
+        background: var(--well);
+        border: 1px solid var(--border);
+        border-radius: var(--r-pill);
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .stat-chip:hover {
+        border-color: var(--c);
+      }
+      .stat-chip i {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--c);
+      }
       .top-actions {
         display: flex;
         align-items: center;
@@ -2364,6 +2399,20 @@
       }
       html.mobile .topbar h1 {
         font-size: 21px;
+      }
+      html.mobile .topbar {
+        flex-wrap: wrap;
+      }
+      html.mobile .stat-chips {
+        order: 3;
+        flex-basis: 100%;
+        justify-content: flex-start;
+        padding: 8px 0 0;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+      html.mobile .stat-chips:empty {
+        display: none;
       }
       html.mobile #logBtn {
         font-size: 0;
@@ -5159,6 +5208,7 @@
       <main>
         <header class="topbar">
           <div><h1 id="title"></h1></div>
+          <div class="stat-chips" id="statChips"></div>
           <div class="top-actions">
             <span class="chip-date" id="todayChip"></span
             ><button class="icon-btn" id="themeBtn" title="Toggle light / dark"></button>
@@ -5789,6 +5839,21 @@
         await render();
       }
       let QUEUE = Promise.resolve();
+      // what the body and kit are asking for, as chips in the header of every page: one place, so no page can forget
+      async function paintStatus() {
+        const r = await call("status_now").catch(() => null),
+          el = $("#statChips");
+        if (!el || !r || !r.ok) return;
+        const col = { ok: "var(--ok)", warn: "var(--warn)", bad: "var(--bad)", info: "var(--brand)" };
+        const shown = r.items.filter((x) => !(x.kind === "issue" && PAGE === "dashboard")); // the dashboard says it in full
+        el.innerHTML = shown
+          .map(
+            (x, i) =>
+              `<button class="stat-chip" data-i="${i}" style="--c:${x.kind === "issue" ? KIND_C[x.issue] || col.warn : col[x.level]}" title="${esc(x.tip)}"><i></i>${esc(x.text)}</button>`,
+          )
+          .join("");
+        $$("#statChips .stat-chip").forEach((b) => (b.onclick = () => go(shown[+b.dataset.i].go)));
+      }
       function render(keepScroll) {
         // serialised: overlapping renders (save + navigate) can't interleave their DOM writes
         QUEUE = QUEUE.catch(() => {}).then(async () => {
@@ -5804,6 +5869,7 @@
           clearTimeout(t);
           c.scrollTop = keepScroll ? top : 0;
           CHARTS.forEach((f) => f());
+          paintStatus();
         });
         return QUEUE;
       }
