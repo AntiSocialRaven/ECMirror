@@ -753,6 +753,52 @@ DESC = {
     },
 }
 
+# Race-pace work is sized for the event, not the phase: a mile's reps are 400-1200 m, a 10K's are minutes. These
+# swap the half-marathon-sized text above for shorter events (keyed by the exact text; pace placeholders still apply).
+EVENT_TEXT = {
+    "short": {  # a run leg under about 12 minutes: the mile, the 1500
+        "Race-pace blocks: 3 x 10 min @ {race_run}, 2 min jog.": "Race-pace reps: 6 x 400 m @ {race_run}, 90 s jog.",
+        "Mixed: 3 x 2 min @ {vo2p}, 3 x 5 min @ {race_run}, easy jog between.":
+            "Mixed: 3 x 2 min @ {vo2p}, 4 x 400 m @ {race_run}, easy jog between.",
+        "Race-pace blocks: 2 x 15 min @ {race_run}, 3 min jog.": "Race-pace reps: 4 x 800 m @ {race_run}, 2 min jog.",
+        "Race-pace run: 2 x 20 min @ {race_run}.":
+            "Race-pace run: 3 x 1200 m @ {race_run}, 3 min jog, after a 15 min warm-up.",
+        "Race-pace run: 4 x 8 min @ {race_run}, 90 s jog.":
+            "Race-pace run: 8 x 300 m @ {race_run}, 60 s jog, after a 15 min warm-up.",
+        "Race-pace run: 30 min @ {race_run} after a 15 min warm-up.":
+            "Race-pace run: 2 x 600 m @ {race_run}, 3 min jog, after a 15 min warm-up.",
+        "3 x 5 min @ {race_run}, easy otherwise.": "3 x 400 m @ {race_run}, easy otherwise.",
+        "15 min @ {race_run} inside an easy run.": "2 x 300 m @ {race_run} inside an easy run.",
+        "Long run with 3 x 15 min @ {race_run}. Rehearse race shoes, kit and gels.":
+            "Long run Z2 @ {easy}, with 4 x 3 min @ {steady} in the second half. Rehearse race shoes and kit.",
+        "Long run with 2 x 20 min @ {race_run}, easy between. Rehearse fueling.":
+            "Long run Z2 @ {easy}, with 3 x 5 min @ {steady}, easy between.",
+        "Long run, last 40 min @ {race_run}. Race shoes, kit and gels.":
+            "Long run Z2 @ {easy}, last 15 min @ {steady}.",
+        "Shorter long run, easy, with 10 min @ {race_run}.":
+            "Shorter long run, easy, with 4 x 20 s strides at the end.",
+    },
+    "mid": {  # 12-50 minutes: the 5K and 10K
+        "Race-pace blocks: 3 x 10 min @ {race_run}, 2 min jog.": "Race-pace blocks: 5 x 1000 m @ {race_run}, 90 s jog.",
+        "Mixed: 3 x 2 min @ {vo2p}, 3 x 5 min @ {race_run}, easy jog between.":
+            "Mixed: 3 x 2 min @ {vo2p}, 3 x 1000 m @ {race_run}, easy jog between.",
+        "Race-pace blocks: 2 x 15 min @ {race_run}, 3 min jog.": "Race-pace blocks: 3 x 8 min @ {race_run}, 2 min jog.",
+        "Race-pace run: 2 x 20 min @ {race_run}.": "Race-pace run: 2 x 12 min @ {race_run}, 3 min jog.",
+        "Race-pace run: 4 x 8 min @ {race_run}, 90 s jog.": "Race-pace run: 4 x 6 min @ {race_run}, 90 s jog.",
+        "Race-pace run: 30 min @ {race_run} after a 15 min warm-up.":
+            "Race-pace run: 20 min @ {race_run} after a 15 min warm-up.",
+        "3 x 5 min @ {race_run}, easy otherwise.": "3 x 3 min @ {race_run}, easy otherwise.",
+        "15 min @ {race_run} inside an easy run.": "10 min @ {race_run} inside an easy run.",
+        "Long run with 3 x 15 min @ {race_run}. Rehearse race shoes, kit and gels.":
+            "Long run with 3 x 8 min @ {race_run}. Rehearse race shoes and kit.",
+        "Long run with 2 x 20 min @ {race_run}, easy between. Rehearse fueling.":
+            "Long run with 2 x 10 min @ {race_run}, easy between.",
+        "Long run, last 40 min @ {race_run}. Race shoes, kit and gels.":
+            "Long run Z2 @ {easy}, last 25 min @ {race_run}.",
+        "Shorter long run, easy, with 10 min @ {race_run}.": "Shorter long run, easy, with 5 min @ {race_run}.",
+    },
+}
+
 # A phase's session can be a list: the plan walks it week by week, so a key session advances and rotates instead of
 # repeating. Each list reads as a short block of progression, and a different key starts at a different point.
 VARIANTS = {
@@ -3681,6 +3727,8 @@ def build_plan(
         if sg["kind"] == "leg" and sg.get("secs"):
             legsecs[sg["sport"]] = legsecs.get(sg["sport"], 0) + sg["secs"]
     now_w = (today - ONE * today.weekday() - week0).days // 7
+    run_s = legsecs.get("Run", 0)
+    run_class = "short" if 0 < run_s < 720 else "mid" if 0 < run_s < 3000 else ""
     weeks, seen, tkey = [], {}, {}  # tkey: which rhythm slot a session came from, so its ref ignores the weekday
     for i in range(n):
         ws = week0 + dt.timedelta(weeks=i)
@@ -3722,6 +3770,8 @@ def build_plan(
                 d = DESC[key].get(dp, DESC[key].get("*", DESC[key].get("Base")))
                 if isinstance(d, list):  # block progress, offset per session so the week's key sessions differ
                     d = d[(seen[phase] + sum(map(ord, key)) + wd) % len(d)]
+                if sport == "Run":
+                    d = EVENT_TEXT.get(run_class, {}).get(d, d)
                 d = d.format(sport=sport, **tgt)
             sessions.append([day, sport, dur, dur / 3600 * IF * IF * 100, d, None])
             tkey[id(sessions[-1])] = (key, sessions[-1])  # holding the session keeps its id from being reused
