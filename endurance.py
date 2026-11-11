@@ -2428,7 +2428,10 @@ def _rank_trend(hits, goal_secs):
     pred_today = my + slope * (today_x - mx)
     if pred_today <= goal_secs:
         return say("pr.trend.arrived")
-    eta = dt.date.today() + dt.timedelta(days=(goal_secs - pred_today) / slope)
+    days = (goal_secs - pred_today) / slope
+    if days > 5 * 365:  # barely improving: a date that far out is noise, and centuries out it overflows date
+        return say("pr.trend.flat")
+    eta = dt.date.today() + dt.timedelta(days=days)
     year = f", {eta.year}" if (eta - dt.date.today()).days > 300 else ""  # a far-out date needs its year too
     return say("pr.trend.eta", date=f"{eta:%b} {eta.day}{year}")
 
