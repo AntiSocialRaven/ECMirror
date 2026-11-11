@@ -3599,7 +3599,11 @@ def build_plan(
     tgt = targets(p, target, tpred)
     av = {int(k): float(v) for k, v in (p.get("availability") or {}).items() if str(k).isdigit()}
     gt, gend = p.get("goal_target"), None
-    tmpl, noway, lday = plan_template(p, [l["sport"] for l in target["legs"]] if target else p["sports"])
+    mix = [l["sport"] for l in target["legs"]] if target else p["sports"]
+    if gt and not target and gt.get("sport"):  # train the goal's sport and your next race's
+        nxt = min((r for r in races if r["date"] >= today.isoformat()), key=lambda r: r["date"], default=None)
+        mix = [gt["sport"]] + [l["sport"] for l in (nxt["legs"] if nxt else []) if l["sport"] != gt["sport"]]
+    tmpl, noway, lday = plan_template(p, mix)
     gs = set(p.get("goal_sports") or ())
     if gs:  # goals tilt the week toward their sports; the shares are renormalised, so the shift is modest
         boost = float(p.get("goal_boost") or 1.25)  # more when the plan is built toward one of them
@@ -5696,7 +5700,7 @@ class Api:
             sport = g["sport"] or GOAL_SPORT.get(g["kind"])
             gt = dict(kind=g["kind"], sport=sport, end=g["by_date"] or "", target=g["target"], uid=g["uid"],
                       fmt_dist=f"{leg_dist_ui(sport, g['dist_km'])} {'km' if not imp() else 'mi'}" if g["dist_km"] else "")
-            pp.update(goal_target=gt, goal_boost=1.6, goal_sports=sorted(set(gs) | {sport} - {None}))
+            pp.update(goal_target=gt, goal_boost=1.6, goal_sports=[sport] if sport else gs)  # another goal's sport must not ride along
             if g["kind"] == "volume":  # a weekly-hours goal is the top of the ramp
                 pp["peak_hours"] = max(float(g["target"]), float(pp["weekly_hours"]))
         races, info = kw.pop("races"), kw.pop("adapt_info", None)
