@@ -171,7 +171,29 @@ CREATE TABLE IF NOT EXISTS plan_weeks(id INTEGER PRIMARY KEY, uid TEXT, start TE
 CREATE TABLE IF NOT EXISTS scenarios(id INTEGER PRIMARY KEY, uid TEXT, name TEXT, change TEXT);
 CREATE TABLE IF NOT EXISTS goals(id INTEGER PRIMARY KEY, uid TEXT, kind TEXT, sport TEXT, dist_km REAL,
     target REAL, start_val REAL, start_date TEXT, by_date TEXT, note TEXT);
+CREATE TABLE IF NOT EXISTS undo_log(seq INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT, ts INTEGER, tbl TEXT,
+    rows_json TEXT, profile_json TEXT, created_json TEXT);
+CREATE TABLE IF NOT EXISTS issue_log(issue_id INTEGER, date TEXT, severity INTEGER);
 """
+
+UNDO_KEEP = 50
+UNDO_NOUN = dict(
+    workouts="workout",
+    wellness="check-in",
+    races="race",
+    issues="issue",
+    habits="habit",
+    reminders="reminder",
+    quotes="quote",
+    scheduled="scheduled session",
+    gear="gear",
+    plan_edits="session",
+    day_locks="blocked day",
+    session_templates="saved session",
+    plan_weeks="week setting",
+    scenarios="scenario",
+    goals="goal",
+)
 
 DATA_TABLES = (
     "workouts",
@@ -219,6 +241,7 @@ SYNC_TABLES = {
 
 LOCAL_KEYS = {
     "theme",
+    "map_tiles",
     "sync_host",
     "sync_code",
     "sync_remote_rev",
@@ -402,6 +425,9 @@ DEFAULTS = dict(
     hub_code="",
     hub_last="",
     serve_assets=False,
+    coach_keep="",
+    check_extra=[],
+    map_tiles=False,
     device_id="",
     device_name="",
     health_on=False,
@@ -1377,6 +1403,11 @@ PROFILE_META = {
         "Sets where in the 3–6 mg/kg range race-day dosing sits",
     ),
     "theme": ("Theme", ("select", [("system", "Match Windows"), ("light", "Light"), ("dark", "Dark")]), ""),
+    "map_tiles": (
+        "Street maps under routes",
+        "bool",
+        "Off draws the route alone. On fetches OpenStreetMap tiles, which tells them roughly where you train",
+    ),
     "team_on": (
         "I train with a team or coach",
         "bool",
@@ -1439,7 +1470,7 @@ PROFILE_SECTIONS = [
         ],
     ),
     ("Bike equipment", ["cda", "bike_kg"]),
-    ("Appearance", ["theme"]),
+    ("Appearance", ["theme", "map_tiles"]),
 ]
 
 CHECK_ITEMS = {
@@ -1682,6 +1713,8 @@ def riegel(d1, t1, d2, k=1.06):
 
 
 _RUN_ANCHORS = []  # (km, secs): the best logged run at each standard distance in the last year
+_ANCHOR_CTL = {}  # (km, secs) -> CTL on the day that effort was run, so it can be rescaled to today's fitness
+_FTP_FLOOR = [0.0]  # best FTP the last 8 weeks of rides prove, or 0: a ride average can only understate FTP
 
 
 def best_run_anchors(found):
@@ -1690,10 +1723,52 @@ def best_run_anchors(found):
     cutoff = (dt.date.today() - dt.timedelta(days=365)).isoformat()
     out = []
     for sport, key, _, km in RECORD_EVENTS:
-        recent = [secs for secs, date, _ in found.get((sport, key), []) if date and date >= cutoff]
+        recent = [secs for secs, date, *_ in found.get((sport, key), []) if date and date >= cutoff]
         if sport == "Run" and recent:
             out.append((km, min(recent)))
     return out
+
+
+def anchor_ctls(found, rows):
+    """CTL on the day of each run anchor. Efforts in the first six weeks of the log are skipped: the chart is still
+    warming up from zero there and would make the athlete look far fitter now than they were."""
+    daily = {}
+    for w in rows:
+        d = dt.date.fromisoformat(w["date"])
+        daily[d] = daily.get(d, 0) + (w["tss"] or 0)
+    if not daily:
+        return {}
+    first = min(daily)
+    cutoff = (dt.date.today() - dt.timedelta(days=365)).isoformat()
+    series = {d: c for d, c, _, _ in pmc(daily, first, dt.date.today())}
+    out = {}
+    for sport, key, _, km in RECORD_EVENTS:
+        recent = [(secs, date) for secs, date, *_ in found.get((sport, key), []) if date and date >= cutoff]
+        if sport == "Run" and recent:
+            secs, date = min(recent)
+            day = dt.date.fromisoformat(date)
+            if (day - first).days >= 42 and day in series:
+                out[(km, secs)] = series[day]
+    return out
+
+
+def recent_ftp_floor(rows):
+    """FTP the recent rides prove: 95% of a 20-60 min ride's average (the 20-minute test rule), the average itself
+    from an hour up. Only ever a floor, since a ride average sits below the best effort inside it."""
+    cutoff = (dt.date.today() - dt.timedelta(days=56)).isoformat()
+    best = 0.0
+    for w in rows:
+        if SPORT_FAMILY.get(w["sport"], w["sport"]) != "Bike" or w["date"] < cutoff:
+            continue
+        if w["avg_w"] and w["dur_s"] >= 1200:
+            best = max(best, w["avg_w"] * (1.0 if w["dur_s"] >= 3600 else 0.95))
+    return best
+
+
+def eff_ftp(p):
+    """The FTP predictions use: the stored one, lifted to what recent rides prove. A profile whose FTP was changed
+    (a what-if, a test preview) is taken at its word."""
+    return max(p["ftp"], _FTP_FLOOR[0]) if p["ftp"] == P["ftp"] else p["ftp"]
 
 
 def run_anchor(p, km=None):
@@ -1728,7 +1803,7 @@ def predict(p, race, ctl):
             h = km / 30
             for _ in range(4):  # IF depends on duration, duration on IF
                 IF = min(1.05, h**-0.16) * (0.92 if run_after else 1) + fit  # ~1.0 @1h, 0.84 @3h, 0.77 @5h
-                watts = p["ftp"] * IF
+                watts = eff_ftp(p) * IF
                 # ponytail: flat physics + ~15% of climbing potential energy lost (~1.3 min/100 m); GPX sim would be exact
                 secs = (km * 1000 / bike_speed(watts, mass, p["cda"]) + mass * 9.81 * elev * 0.15 / watts) * (
                     1 + heat / 2
@@ -1738,8 +1813,11 @@ def predict(p, race, ctl):
         elif sport == "Run":
             d1, t1 = run_anchor(p, km)
             fresh = riegel(d1, t1, km)
+            c0 = None if p.get("_no_anchor") else _ANCHOR_CTL.get((d1, t1))
+            if c0 is not None:  # that effort was run at fitness c0: scale it to race-day fitness, either way
+                fresh *= max(0.90, min(1.12, 1 - 0.12 * (ctl - c0) / max(c0, 20)))
             prior_h = elapsed / 3600
-            fade = 1 + (0.03 + 0.018 * prior_h if i else 0) - (fit if i else fit / 2)
+            fade = 1 + (0.03 + 0.018 * prior_h if i else 0) - (fit if i else 0 if c0 is not None else fit / 2)
             secs = fresh * fade * (1 + heat) + elev * 0.6  # ~1 min per 100 m of climbing
             seg.update(secs=secs, fresh=fresh, pace=fd("pace", secs / km), pace_s=secs / km)
         else:
@@ -2161,23 +2239,24 @@ def _efforts(rows, races, p):
     """Every qualifying effort as {(sport, key): [(secs, date, source)]}, plus the sessions that came close
     enough to have been meant as that distance but fell outside the window, so the page can say why."""
     found, near = {}, {}
-    add = lambda k, secs, date, src: found.setdefault(k, []).append((secs, date, src))
+    add = lambda k, secs, date, src, wid=0: found.setdefault(k, []).append((secs, date, src, wid))
     rk, rs = p.get("recent_race_km") or 0, p.get("recent_race_s") or 0
     for sport, key, label, km in RECORD_EVENTS:
         for w in rows:
             if SPORT_FAMILY.get(w["sport"], w["sport"]) != sport or not w["dur_s"] or w["sport"] == "Brick":
                 continue
             d = w["dist_km"] or 0
+            wid = w["id"] if "id" in w.keys() else 0
             splits = json.loads(w["splits"]) if w["splits"] else None
             t = None
             if splits and d >= km:
                 t = _best_window(splits, km)
                 if t:
-                    add((sport, key), t, w["date"], say("pr.source.block"))
+                    add((sport, key), t, w["date"], say("pr.source.block"), wid)
             if not splits and event_window(km, sport)[1] < d <= km * 3:
                 # a longer run at this average pace means some stretch of it was at least that fast: a safe floor,
                 # and never an overstatement, so it counts until real splits show something quicker
-                add((sport, key), w["dur_s"] * km / d, w["date"], say("pr.source.pace", dist=leg_label(sport, d)))
+                add((sport, key), w["dur_s"] * km / d, w["date"], say("pr.source.pace", dist=leg_label(sport, d)), wid)
             if d and counts_as(d, km, sport):  # logged as that distance: the clean case
                 adj = _scale(w["dur_s"], d, km)
                 add(
@@ -2189,6 +2268,7 @@ def _efforts(rows, races, p):
                         if adj == w["dur_s"]
                         else say("pr.source.adjusted", logged=leg_label(sport, d))
                     ),
+                    wid,
                 )
             elif d and km * 0.8 <= d <= km * 1.35:
                 near.setdefault((sport, key), []).append((w["date"], d, w["dur_s"]))
@@ -2327,7 +2407,7 @@ def _rank_trend(hits, goal_secs):
     if not goal_secs:
         return None
     by_date = {}
-    for secs, date, _ in hits:
+    for secs, date, *_ in hits:
         if date:
             by_date[date] = min(secs, by_date.get(date, secs))
     pts = sorted(by_date.items())
@@ -2360,7 +2440,7 @@ def _ranked(hits, ref, p, label, **extra):
     Entering an old PR after the fact is a normal thing to do, and it should still tell you what it beat.
     """
     ranked = sorted(hits)
-    secs, date, src = ranked[0]
+    secs, date, src, *rest = ranked[0]
     prev = ranked[1][0] if len(ranked) > 1 else None
     af = age_factor(p.get("age", 30))
     t = tier_of(ref / max(1.0, secs * af) * 100)
@@ -2375,6 +2455,7 @@ def _ranked(hits, ref, p, label, **extra):
         time=hms(secs),
         date=date,
         source=src,
+        wid=rest[0] if rest else 0,
         count=len(hits),
         prev=hms(prev) if prev else "",
         gain=hms(prev - secs) if prev and prev > secs else "",
@@ -3264,7 +3345,7 @@ def apply_locks(weeks, locks, today):
                     w["sessions"].append(s)
 
 
-def apply_edits(weeks, edits, last_day, alias=None, orphans=None, today=None):
+def apply_edits(weeks, edits, last_day, alias=None, orphans=None, today=None, shelved=None):
     """Athlete edits over the generated plan. `src` names the generated session an edit replaces (a missing one is
     reported in `orphans`, not applied: the plan moved on); no `src` adds a session. Blank fields inherit from the
     session being replaced. `alias` maps the older date-based refs onto today's."""
@@ -3281,7 +3362,9 @@ def apply_edits(weeks, edits, last_day, alias=None, orphans=None, today=None):
         if old:
             next(w for w in weeks if old in w["sessions"])["sessions"].remove(old)
         if not e["date"]:
-            continue  # skipped
+            if shelved is not None:  # skipped, not gone: the shelf shows it and a drop on a day brings it back
+                shelved.append((e, old))
+            continue
         d = dt.date.fromisoformat(e["date"])
         wk = next((w for w in weeks if w["start"] <= d < w["start"] + 7 * ONE), None)
         if not wk or d > last_day or any(s[1] == "Race" and s[0] == d for w in weeks for s in w["sessions"]):
@@ -3296,6 +3379,32 @@ def apply_edits(weeks, edits, last_day, alias=None, orphans=None, today=None):
             tss = dur / 3600 * 0.65**2 * 100  # an added session with no stated load counts as easy aerobic
         desc = e["desc"] or (old[4] if old else f"{sport} (added)")
         wk["sessions"].append([d, sport, dur, tss, desc, "e:" + e["uid"]])
+
+
+def shelf_rows(shelved, today):
+    """Sessions the athlete set aside, newest first: what they were, and whether the plan or they made them."""
+    out = []
+    for e, old in reversed(shelved):
+        if e["group_info"] == "copy":  # stepped aside by Copy week: the copy replaced it, so nothing to restore
+            continue
+        if old and old[0] < today - dt.timedelta(days=14):
+            continue  # an old skip is history, not something to put back
+        sport = old[1] if old else e["sport"] or "Run"
+        dur = old[2] if old else e["dur_s"] or 3600.0
+        tss = old[3] if old else e["tss"] if e["tss"] is not None else dur / 3600 * 0.65**2 * 100
+        out.append(
+            dict(
+                uid=e["uid"],
+                ref="e:" + e["uid"],
+                sport=sport,
+                dur=hms(dur),
+                dur_s=dur,
+                tss=round(tss),
+                desc=old[4] if old else e["desc"] or f"{sport} (added)",
+                was=old[0].isoformat() if old else None,
+            )
+        )
+    return out[:12]
 
 
 def orphan_row(e):
@@ -3763,7 +3872,8 @@ def goal_checkpoint(gt):
 
 
 def build_plan(
-    p, races, today=None, ctl=50, issues=None, scheduled=None, edits=None, locks=None, weeks_cfg=None, orphans=None
+    p, races, today=None, ctl=50, issues=None, scheduled=None, edits=None, locks=None, weeks_cfg=None, orphans=None,
+    shelved=None,
 ):
     """Monday-Sunday weeks from plan start through the target race week (or 12 rolling weeks with no race).
     Returns (target, [{start, phase, hours, sessions:[(date, sport, dur_s, tss, desc, ref)]}]).
@@ -3805,6 +3915,31 @@ def build_plan(
             gend = max(gend, week0 + dt.timedelta(weeks=2, days=5))
             n = ((gend - ONE * gend.weekday()) - week0).days // 7 + 1
             T = 1
+    # The plan peaks for the target, then keeps going: each later A/B race gets a short recovery, a rebuild from a
+    # held base, its own taper and race week. Earlier or minor races only dip the volume around them (below).
+    segs, end_day, anchor_ids = [], race_day, set()
+    if target:
+        later = [
+            r for r in races
+            if r["priority"] in ("A", "B") and r["id"] != target["id"] and r["date"] > target["date"]
+            and dt.date.fromisoformat(r["date"]) <= week0 + dt.timedelta(weeks=52)
+        ]
+        later.sort(key=lambda r: r["date"])
+        wk_of = lambda d: (d - ONE * d.weekday() - week0).days // 7
+        prev, ptot = n - 1, tpred["total"]
+        segs.append((n - 1, 0, T))
+        for r in later[:3]:
+            a = wk_of(dt.date.fromisoformat(r["date"]))
+            rec = 2 if (ptot or 0) > 10800 else 1
+            if a <= prev + rec + 1:  # too close to the last block to rebuild: it is a dip, not a block
+                continue
+            segs.append((a, prev + 1 + rec, min(taper_weeks(p, predict(p, r, ctl)["total"]), a - prev - rec - 1)))
+            end_day, prev, ptot = dt.date.fromisoformat(r["date"]), a, predict(p, r, ctl)["total"]
+            anchor_ids.add(r["id"])
+        if len(segs) == 1:
+            segs = []
+        else:
+            n = segs[-1][0] + 1
     R = int(p.get("recovery_every", 4))
     build_n = max(1, n - T)
     ifs, legsecs = {}, {}
@@ -3817,29 +3952,41 @@ def build_plan(
     weeks, seen, tkey = [], {}, {}  # tkey: which rhythm slot a session came from, so its ref ignores the weekday
     for i in range(n):
         ws = week0 + dt.timedelta(weeks=i)
-        out = n - i
+        out, Ti, bn, iw, hlo, first_seg = n - i, T, build_n, i, p["weekly_hours"], True
+        if segs:
+            j = next(k for k, sg in enumerate(segs) if sg[0] >= i)
+            a, s0, Ti = segs[j]
+            out, first_seg = a - i + 1, j == 0
+            if j and i < s0:
+                out = -1  # recovering from the last race
+            else:
+                bn, iw = max(1, a - (s0 if j else 0) + 1 - Ti), i - (s0 if j else 0)
+                if j:
+                    hlo = p["weekly_hours"] + 0.6 * (p["peak_hours"] - p["weekly_hours"])
         ending = bool(target or gend)
-        if ending and out == 1:
+        if out < 0:
+            phase, hrs = "Recovery", max(p["weekly_hours"] * 0.7, hlo * 0.6)
+        elif ending and out == 1:
             phase, hrs = ("Race week", p["peak_hours"] * float(p.get("race_week_pct", 40)) / 100) if target else (
                 "Checkpoint",
                 p["peak_hours"] * float(p.get("taper_floor", 60)) / 100,
             )
-        elif ending and out <= T:
+        elif ending and out <= Ti:
             phase, hrs = "Taper", p["peak_hours"] * min(1.0, float(p.get("taper_floor", 60)) / 100 + 0.1 * (out - 2))
         else:
-            frac = i / max(1, build_n - 1)
+            frac = iw / max(1, bn - 1)
             style = p.get("ramp_style", "linear")
-            top = (build_n - 1) // 3 * 3  # the week the last step starts
+            top = (bn - 1) // 3 * 3  # the week the last step starts
             lift = (  # how much of the climb from now-hours to peak-hours has happened by this week
-                min(1.0, i // 3 * 3 / top) if style == "stepped" and top else frac**2 if style == "late" else frac
+                min(1.0, iw // 3 * 3 / top) if style == "stepped" and top else frac**2 if style == "late" else frac
             )
-            hrs = p["weekly_hours"] + (p["peak_hours"] - p["weekly_hours"]) * lift
+            hrs = hlo + (p["peak_hours"] - hlo) * lift
             ad = p.get("adapt")
-            if ad and ws >= today - ONE * today.weekday():  # start from real hours
+            if ad and first_seg and ws >= today - ONE * today.weekday():  # start from real hours
                 hrs *= ad["factor"] + (1 - ad["factor"]) * min(1.0, (i - now_w) / max(1, build_n - 1 - now_w))
             peak, build = int(p.get("peak_weeks", 3)), float(p.get("build_frac", 0.45))
-            phase = "Peak" if ending and out <= T + peak else "Build" if frac >= build else "Base"
-            if R and (i + 1) % R == 0 and out > T + 1:
+            phase = "Peak" if ending and out <= Ti + peak else "Build" if frac >= build else "Base"
+            if R and (iw + 1) % R == 0 and out > Ti + 1:
                 phase, hrs = "Recovery", hrs * (1 - float(p.get("recovery_cut", 35)) / 100)
         seen[phase] = seen.get(phase, -1) + 1  # weeks of this phase so far; a recovery week doesn't reset the block
         sessions = []
@@ -3930,7 +4077,7 @@ def build_plan(
         if long_race:
             for s in on(race_day - 2 * ONE):
                 s[4] += " Carb load day 1: 8-10 g carbs/kg."
-        weeks[-1]["sessions"] = [s for s in weeks[-1]["sessions"] if s[0] <= race_day]
+        weeks[-1]["sessions"] = [s for s in weeks[-1]["sessions"] if s[0] <= end_day]
     if gend:  # the test that closes a goal block, with an easy day before it
         drop(gend)
         around_race(
@@ -3945,7 +4092,7 @@ def build_plan(
         if cp:
             add(gend, cp[0], cp[1], cp[1] / 3600 * cp[2] ** 2 * 100, cp[3], None)
         weeks[-1]["sessions"] = [s for s in weeks[-1]["sessions"] if s[0] <= gend]
-    first_day, last_day = weeks[0]["start"], (race_day or gend or weeks[-1]["start"] + 6 * ONE)
+    first_day, last_day = weeks[0]["start"], (end_day or gend or weeks[-1]["start"] + 6 * ONE)
     for r in races:
         d = dt.date.fromisoformat(r["date"])
         if not first_day <= d <= last_day:
@@ -3953,7 +4100,7 @@ def build_plan(
         pr = predict(p, r, ctl)
         if r is not target and (not target or r["id"] != target["id"]):
             drop(d)
-            if r["priority"] == "B":
+            if r["priority"] in ("A", "B"):
                 around_race(
                     d - ONE,
                     "Meet tomorrow: keep it light unless your coach says otherwise.",
@@ -3982,6 +4129,18 @@ def build_plan(
             f"{r['name']} ({r['priority']} race). See Races for pacing and fueling.",
             r["id"],
         )
+    cut = {"A": 0.45, "B": 0.3, "C": 0.12}  # how hard a race that is not the plan's focus bites into its week
+    for r in races:
+        d = dt.date.fromisoformat(r["date"])
+        if not first_day <= d <= last_day or (target and r["id"] == target["id"]) or r["id"] in anchor_ids:
+            continue
+        for k, f in ((0, 1 - cut[r["priority"]]), (1, 1 - cut[r["priority"]] / 2)):
+            wk = next((w for w in weeks if w["start"] <= d + dt.timedelta(weeks=k) < w["start"] + 7 * ONE), None)
+            if not wk or wk["phase"] in ("Taper", "Race week", "Checkpoint"):
+                continue
+            for s in wk["sessions"]:
+                if s[1] not in ("Race", "Rest", "Mobility") and s[5] is None and (k or s[0] < d):
+                    s[2], s[3] = s[2] * f, s[3] * f
     count, slot, alias = {}, {}, {}
     for w in weeks:  # refs come before locks and edits, which find sessions by them
         for s in w["sessions"]:
@@ -3994,7 +4153,7 @@ def build_plan(
                     alias[s[5]] = s[5] = f"p:{w['start'].isoformat()}|{tk[0]}|{s[1]}|{m}"
     apply_weeks(weeks, weeks_cfg or [], today)
     apply_locks(weeks, locks or [], today)
-    apply_edits(weeks, edits or [], last_day, alias, orphans, today)
+    apply_edits(weeks, edits or [], last_day, alias, orphans, today, shelved)
     touched = set()
     for sc in sorted(scheduled or [], key=lambda x: x["date"]):  # the athlete's own sessions win over the plan's
         d = dt.date.fromisoformat(sc["date"])
@@ -4045,6 +4204,39 @@ def build_plan(
 
 
 # ---------------------------------------------------------------- health: injuries, illness, fatigue
+
+
+def test_update(kind, v):
+    """The profile change a field-test result means. Raises ValueError (or its cousins) on a result that makes no
+    sense; apply_test and preview_test both go through it so the preview can never disagree with the save."""
+    if kind == "ftp":
+        upd = {"ftp": round(float(v[0]) * 0.95)}
+    elif kind == "lthr":
+        upd = {"lthr": float(v[0])}
+    elif kind == "maxhr":
+        upd = {"max_hr": float(v[0])}
+    elif kind == "css":
+        upd = {"css": (parse_clock(v[0]) - parse_clock(v[1])) / 2 / (YD if imp() else 1)}
+    else:
+        d, t = from_ui("dist", v[0]), parse_clock(v[1])
+        upd = {"run_thr_pace": threshold_from_race(d, t), "recent_race_km": d, "recent_race_s": t}
+    if any(not x > 0 for x in upd.values()):
+        raise ValueError("Result must be positive")
+    return upd
+
+
+FIELD_TESTS = {  # kind -> (sport, minutes, load, what to do): what "schedule this test" puts on the calendar
+    "ftp": ("Bike", 60, 75, "FTP test. Warm up 15 min, 5 min all-out, 10 min easy, then 20 min as hard as you can "
+            "evenly hold. FTP is 95% of that 20-min average."),
+    "lthr": ("Run", 45, 55, "LTHR test. After a warm-up, a solo 30-minute all-out effort, lapping at 10 min. LTHR is "
+             "your average heart rate over the last 20 minutes."),
+    "maxhr": ("Run", 40, 50, "Max heart rate test. Thorough warm-up, 3 min hard, then a 1-min all-out uphill finish. "
+              "Record the peak. Only when healthy and used to hard efforts."),
+    "css": ("Swim", 45, 40, "CSS test. Warm up, 400 all-out, rest 5-10 min, then 200 all-out. CSS is "
+            "(T400 - T200) / 2 per 100."),
+    "race": ("Run", 40, 60, "Threshold time trial. A fair, flat 5K as hard as you can pace it; the result sets "
+             "your run threshold."),
+}
 
 
 def issue_from_row(r):
@@ -4104,11 +4296,8 @@ def adapt_session(p, s, issues):
     if sport in ("Race", "Rest", "Mobility"):
         return [list(s)]
     act = active_on(issues, day)
-    recent = [
-        i
-        for i in issues
-        if i["end"] and 0 < (day - dt.date.fromisoformat(i["end"])).days <= (i.get("ramp_days") or DEFAULT_RAMP_DAYS)
-    ]
+    ramp_of = lambda i: DEFAULT_RAMP_DAYS if i.get("ramp_days") is None else i["ramp_days"]
+    recent = [i for i in issues if i["end"] and 0 < (day - dt.date.fromisoformat(i["end"])).days <= ramp_of(i)]
     if not act and not recent:
         return [list(s)]
     notes, factor, easy, swapped = [], 1.0, False, None
@@ -4147,7 +4336,7 @@ def adapt_session(p, s, issues):
         if i["kind"] == "Injury" and sport not in i["sports"]:
             continue
         since = (day - dt.date.fromisoformat(i["end"])).days
-        ramp = i.get("ramp_days") or DEFAULT_RAMP_DAYS
+        ramp = ramp_of(i)
         half = max(1, ramp // 2)  # first half of the ramp at half volume, second half at three-quarters
         f = (0.5 if since <= half else 0.75) if i["kind"] != "Fatigue" else 0.8
         factor, easy = min(factor, f), easy or since <= half
@@ -4287,6 +4476,7 @@ def recovery_clock(rows, p, now=None):
         until=(now + dt.timedelta(hours=total)).isoformat(timespec="minutes"),
         items=[
             dict(
+                id=w["id"] if "id" in w.keys() else None,
                 date=w["date"],
                 sport=w["sport"],
                 dur=hms(w["dur_s"] or 0),
@@ -4338,6 +4528,7 @@ def load_state(rows, series, p, today=None, now=None):
         tsb=round(series[-1][3]) if series else 0,
         ctl=round(series[-1][1]) if series else 0,
         recovery=recovery_clock(rows, p, now),
+        by_day=by_day,
     )
 
 
@@ -4437,6 +4628,13 @@ def adapt_for_load(p, sessions, advice, state):
     return out
 
 
+def coached_today(p, open_today, advice, state, today):
+    """The coach's rewrite of today, unless the athlete said to keep what was planned."""
+    if p.get("coach_keep") == today.isoformat():
+        return [list(s) for s in open_today]
+    return adapt_for_load(p, open_today, advice, state)
+
+
 def training_status(rows, series, state, days_to_race=None):
     """Productive, overreaching, detraining and the rest - from the direction fitness is moving and what it is
     costing. Garmin calls this training status; the inputs are the same ones, the labels are the standard ones."""
@@ -4525,7 +4723,7 @@ def intensity_mix(rows, today=None, days=28):
     )
 
 
-def threshold_drift(p, recs):
+def threshold_drift(p, recs, ftp_floor=0.0):
     """Your bests say one thing, your saved thresholds say another. Surfaces the gap and the number to change,
     but never changes it - a PR can be a downhill course or a short GPS track, and only you know which."""
     out = []
@@ -4551,6 +4749,18 @@ def threshold_drift(p, recs):
                 )
             )
             break
+    if ftp_floor >= p["ftp"] * 1.03:
+        out.append(
+            dict(
+                what="FTP",
+                key="ftp",
+                now=f"{p['ftp']:.0f} W",
+                suggested=f"{ftp_floor:.0f} W",
+                value=round(ftp_floor),
+                gain=f"{ftp_floor - p['ftp']:.0f} W higher",
+                why="A ride in the last eight weeks averaged more than your FTP can explain.",
+            )
+        )
     return out
 
 
@@ -5069,6 +5279,11 @@ def _parse_fit(path):
                         t=ts,
                         dist_m=msg[5] / 100,
                         **({"ele_m": msg[2] / 5 - 500} if msg.get(2) is not None else {}),
+                        **(
+                            {"lat": round(msg[0] * 180 / 2**31, 5), "lon": round(msg[1] * 180 / 2**31, 5)}
+                            if msg.get(0) is not None and msg.get(1) is not None
+                            else {}
+                        ),
                         **({"hr": msg[3]} if msg.get(3) is not None else {}),
                         **({"w": msg[7]} if msg.get(7) is not None else {}),
                     )
@@ -5672,6 +5887,33 @@ def _locked(fn):
     return w
 
 
+def race_levers():
+    """(key, label, unit, profile key, factor to the stored unit, lo, hi, step, sport it needs) for the what-if
+    sliders on a race. The same five the needle list tries, so a slider at the needle's size agrees with it."""
+    pace_f, kg_f = (KM_MI if imp() else 1), (KG_LB if imp() else 1)
+    return [
+        ("ftp", "FTP", "W", "ftp", 1, -30, 30, 5, "Bike"),
+        ("cda", "CdA", "", "cda", 1, -0.04, 0.04, 0.005, "Bike"),
+        ("pace", "Threshold pace", "s" + unit("pace"), "run_thr_pace", 1 / pace_f, -30, 30, 1, "Run"),
+        ("css", "CSS", "s" + unit("swim"), "css", 1, -8, 8, 1, "Swim"),
+        ("weight", "Body weight", unit("weight"), "weight_kg", 1 / kg_f, -5, 5, 0.5, None),
+    ]
+
+
+def _bests_after(fn):
+    """Attach the personal bests this save created (new_bests) to a successful result."""
+
+    def w(self, *a):
+        before = self._bests()
+        r = fn(self, *a)
+        if isinstance(r, dict) and r.get("ok"):
+            r["new_bests"] = self._new_bests(before)
+        return r
+
+    w.__name__ = fn.__name__
+    return w
+
+
 def _f(v, fmt="{:.0f}"):
     return fmt.format(v) if v else ""
 
@@ -5711,7 +5953,6 @@ class Api:
     def __init__(self, db_path=DB_PATH):
         self._path = db_path
         self._lock = threading.RLock()
-        self._undo, self._undo_seq = {}, 0
         self._anchor_key = None
         self._wx = None  # latest forecast (Open-Meteo hourly, last ~3 months + next 10 days), handed over by the UI
         self._hub = None
@@ -5724,10 +5965,18 @@ class Api:
     # ---- internals
     def _workouts(self):
         rows = self._db.execute("SELECT * FROM workouts ORDER BY date DESC, id DESC").fetchall()
-        key = (tuple((w["id"], w["date"], w["dur_s"], w["dist_km"], w["sport"]) for w in rows), P["recent_race_km"])
+        key = (
+            tuple((w["id"], w["date"], w["dur_s"], w["dist_km"], w["sport"], w["avg_w"]) for w in rows),
+            P["recent_race_km"],
+            dt.date.today(),
+        )
         if key != self._anchor_key:  # predictions read the run anchor, so it has to follow the log
             self._anchor_key = key
-            _RUN_ANCHORS[:] = best_run_anchors(_efforts(rows, self._races(forecast=False), P)[0])
+            found = _efforts(rows, self._races(forecast=False), P)[0]
+            _RUN_ANCHORS[:] = best_run_anchors(found)
+            _ANCHOR_CTL.clear()
+            _ANCHOR_CTL.update(anchor_ctls(found, rows))
+            _FTP_FLOOR[0] = recent_ftp_floor(rows)
         return rows
 
     def _wellness(self):
@@ -5904,7 +6153,7 @@ class Api:
         pp["long_hist"] = hist
         races, info = kw.pop("races"), kw.pop("adapt_info", None)
         if pp.get("auto_adapt", True):
-            base = build_plan(pp, races, ctl=series[-1][1], **dict(kw, orphans=None))[1]
+            base = build_plan(pp, races, ctl=series[-1][1], **dict(kw, orphans=None, shelved=None))[1]
             ad = adapt_for(base, self._workouts(), dt.date.today(), kw["issues"], kw["weeks_cfg"])
             if ad:
                 pp["adapt"] = ad
@@ -5917,12 +6166,12 @@ class Api:
         g = next((x for x in self._goals() if x["uid"] == P.get("plan_goal")), None)
         return g if g and (not g["by_date"] or g["by_date"] >= dt.date.today().isoformat()) else None
 
-    def _projection(self, target, weeks, series):
-        """CTL/ATL from today to the target's race morning, following the plan."""
+    def _projection(self, target, weeks, series, until=None):
+        """CTL/ATL from today to the target's race morning (or `until`'s, for the campaign), following the plan."""
         today = dt.date.today()
         if not target:
             return []
-        end = dt.date.fromisoformat(target["date"]) - ONE  # race morning: exclude the race's own TSS
+        end = (until or dt.date.fromisoformat(target["date"])) - ONE  # race morning: exclude the race's own TSS
         planned = {}
         for w in weeks:
             for s in w["sessions"]:
@@ -6041,6 +6290,7 @@ class Api:
         return dict(
             name=P["name"],
             theme=P.get("theme", "light"),
+            map_tiles=bool(P.get("map_tiles")),
             units=P["units"],
             version=VERSION,
             dist_unit=unit("dist"),
@@ -6071,7 +6321,8 @@ class Api:
 
     # ---- dashboard
     @_locked
-    def dashboard(self):
+    def dashboard(self, weeks_back=12):
+        weeks_back = max(4, min(52, int(weeks_back or 12)))
         today = dt.date.today()
         series = self._series()
         _, ctl, atl, tsb = series[-1]
@@ -6081,8 +6332,10 @@ class Api:
         upcoming = [r for r in races if dt.date.fromisoformat(r["date"]) >= today]
         nxt = upcoming[0] if upcoming else None
         pr = predict(P, nxt, proj[-1][1] if proj and nxt is target else ctl) if nxt else None
-        hist = series[-90:]
-        both = hist + proj[:240]
+        hist = series[-max(90, weeks_back * 7) :]
+        last_race = max((s[0] for w in weeks for s in w["sessions"] if s[1] == "Race" and s[0] > today), default=None)
+        wide = self._projection(target, weeks, series, last_race + ONE) if target and last_race else proj
+        both = hist + wide[:400]  # the chart follows the plan past the target to the last race it builds toward
         rows = self._workouts()
         mon = today - ONE * today.weekday()
         present = [s for s in ALL_SPORTS if s in P["sports"] or any(w["sport"] == s for w in rows[:400])]
@@ -6090,14 +6343,15 @@ class Api:
         grp = lambda s: s if s in groups else "Other"
         if "Other" not in groups and any(grp(w["sport"]) == "Other" for w in rows[:400]):
             groups.append("Other")
-        wlabels, wdata = [], {k: [] for k in groups}
-        for i in range(11, -1, -1):
+        wlabels, wstarts, wdata = [], [], {k: [] for k in groups}
+        for i in range(weeks_back - 1, -1, -1):
             ws = mon - dt.timedelta(weeks=i)
             st = dict.fromkeys(wdata, 0.0)
             for w in rows:
                 if ws.isoformat() <= w["date"] < (ws + 7 * ONE).isoformat() and grp(w["sport"]) in st:
                     st[grp(w["sport"])] += (w["dur_s"] or 0) / 3600
             wlabels.append(f"{ws:%b} {ws.day}")
+            wstarts.append(ws.isoformat())
             for k in wdata:
                 wdata[k].append(round(st[k], 2))
         split = dict.fromkeys(groups, 0.0)
@@ -6113,7 +6367,7 @@ class Api:
         state = load_state(rows, series, P, today)
         advice = daily_advice(state, score, active, today)
         open_today = not_done(todays, rows, today)
-        coached = adapt_for_load(P, open_today, advice, state)
+        coached = coached_today(P, open_today, advice, state, today)
         nut = daily_nutrition(
             P,
             [(s[1], s[2], estimate_kcal(P, s[1], s[2], tss=s[3])) for s in todays if s[1] not in ("Race", "Rest")],
@@ -6124,9 +6378,30 @@ class Api:
         # flagged the week, the coarser CTL-ramp check stays quiet instead of raising a second, redundant alarm.
         ramp_warn = ramp > 8 and (state["acwr"] is None or state["acwr"] < 1.35)
         labels = [d.isoformat() for d, *_ in both]
+        at = {d: i for i, d in enumerate(labels)}
+        focus = target["id"] if target else None
         markers = [
-            dict(i=labels.index(r["date"]), name=r["name"], p=r["priority"]) for r in races if r["date"] in labels
+            dict(i=at[r["date"]], name=r["name"], p=r["priority"], kind="race", focus=r["id"] == focus,
+                 days=(dt.date.fromisoformat(r["date"]) - today).days)
+            for r in races
+            if r["date"] in at
+        ] + [
+            dict(i=at[g["by_date"]], p="G", kind="goal", focus=False, name=f"{goal_title(g)} {goal_fmt(g, g['target'])}",
+                 days=(dt.date.fromisoformat(g["by_date"]) - today).days)
+            for g in self._goals()
+            if g.get("by_date") in at
         ]
+        phases = []  # the plan's phases laid over the chart's dates, consecutive weeks of one phase merged
+        for w in weeks:
+            i0, i1 = at.get(w["start"].isoformat()), at.get((w["start"] + 6 * ONE).isoformat())
+            i0 = i0 if i0 is not None else (0 if w["start"] < today else None)
+            if i0 is None or (i1 is None and w["start"] + 6 * ONE < today):
+                continue
+            i1 = i1 if i1 is not None else len(labels) - 1
+            if phases and phases[-1]["phase"] == w["phase"] and phases[-1]["i1"] >= i0 - 1:
+                phases[-1]["i1"] = i1
+            else:
+                phases.append(dict(i0=i0, i1=i1, phase=w["phase"]))
         return dict(
             name=P["name"],
             ctl=round(ctl),
@@ -6167,8 +6442,9 @@ class Api:
                 atl=[round(x[2], 1) for x in both],
                 tsb=[round(x[3], 1) for x in both],
                 markers=markers,
+                phases=phases,
             ),
-            weekly=dict(labels=wlabels, series=wdata),
+            weekly=dict(labels=wlabels, starts=wstarts, series=wdata),
             sport_split={k: round(v, 1) for k, v in split.items()},
             today=[
                 dict(
@@ -6245,13 +6521,14 @@ class Api:
         _, weeks = self._plan(series)
         todays = [s for w in weeks for s in w["sessions"] if s[0] == today]
         open_today = not_done(todays, rows, today)
-        coached = adapt_for_load(P, open_today, advice, state)
+        coached = adapt_for_load(P, open_today, advice, state)  # the coach page always shows the rewrite
         races = [r for r in self._races(forecast=False) if r["date"] >= today.isoformat()]
-        drift = threshold_drift(P, records(rows, self._races(forecast=False), P)) if rows else []
+        drift = threshold_drift(P, records(rows, self._races(forecast=False), P), _FTP_FLOOR[0]) if rows else []
         return dict(
             advice=dict(**advice, trained_today=state["trained_today"]),
             planned=[dict(sport=s[1], dur=hms(s[2]), tss=round(s[3]), desc=s[4]) for s in open_today],
             coached=[dict(sport=s[1], dur=hms(s[2]), tss=round(s[3]), desc=s[4]) for s in coached],
+            kept=P.get("coach_keep") == today.isoformat(),
             readiness=score,
             readiness_notes=notes,
             signals=fatigue_signals(self._wellness(), series, today),
@@ -6271,11 +6548,41 @@ class Api:
                 since_rest=state["since_rest"],
                 tsb=state["tsb"],
                 ctl=state["ctl"],
+                days=[dict(date=(today - ONE * i).isoformat(), tss=round(state["by_day"].get(today - ONE * i, 0)))
+                      for i in range(27, -1, -1)],
             ),
             recovery=state["recovery"],
             done_today=[self._wrow(w) for w in rows if w["date"] == today.isoformat()],
             suggestions=self._suggestions(),
         )
+
+    @_locked
+    def coach_keep(self, on=True):
+        """Ignore the coach's rewrite for today and show what was planned."""
+        was = P.get("coach_keep", "")
+        P["coach_keep"] = dt.date.today().isoformat() if on else ""
+        self._save()
+        return dict(ok=True, undo=self._stash("profile", [], {"coach_keep": was}, [], "Kept today as planned"))
+
+    @_locked
+    def coach_apply(self):
+        """Write the coach's rewrite of today into the plan, as one undoable change."""
+        today = dt.date.today()
+        rows, series = self._workouts(), self._series()
+        state = load_state(rows, series, P, today)
+        score, _ = readiness(self._wellness(), series[-1][3], active_on(self._issues(), today))
+        advice = daily_advice(state, score, active_on(self._issues(), today), today)
+        _, weeks = self._plan(series)
+        open_today = [s for s in not_done([s for w in weeks for s in w["sessions"] if s[0] == today], rows, today)
+                      if isinstance(s[5], str)]
+        if advice["level"] in ("normal", "push") or not open_today:
+            return dict(ok=False, error="The plan already matches today's advice")
+        if advice["level"] == "rest":
+            edits = [dict(ref=s[5], date=None) for s in open_today if s[1] != "Rest"]
+        else:
+            edits = [dict(ref=a[5], dur_s=round(a[2]), tss=a[3], desc=a[4])
+                     for a in adapt_for_load(P, open_today, advice, state) if a[1] not in ("Rest", "Race")]
+        return self.apply_change(dict(edits=edits), "Used the coach's rewrite of today")
 
     @_locked
     def apply_drift(self, key, value):
@@ -6333,6 +6640,7 @@ class Api:
         return dict(tss=round(tss), kcal=round(kcal), dur=hms(dur), pace=pace, src=src)
 
     @_locked
+    @_bests_after
     def save_workout(self, f):
         try:
             rec = self._parse_workout(f)
@@ -6369,6 +6677,7 @@ class Api:
         return dict(ok=True)
 
     @_locked
+    @_bests_after
     def save_live_workout(self, f):
         """Finish of the phone's live-tracking screen: dur_s/dist_km/avg_hr/splits already computed natively
         (GPS + HealthKit), unlike save_workout's hand-typed h/m/s form. dur_s is moving time (what pace/TSS
@@ -6457,6 +6766,7 @@ class Api:
             pace_unit=unit("dist") + "/h" if sport == "Bike" else "/" + unit("dist"),
             elev_unit=unit("elev"),
             decoupling=workout_decoupling(w),
+            route=[[p["lat"], p["lon"]] for p in track] if all("lat" in p for p in track) else None,
         )
 
     @_locked
@@ -6512,39 +6822,70 @@ class Api:
         return self._take("workouts", "id", [int(i) for i in ids])
 
     # ---- undo: deletes stash the removed rows so the UI can put them back
-    def _take(self, table, key, values, profile=None):
+    def _stash(self, table, rows, profile, created, label):
+        """Write an undo entry. It lives in the database, so Undo outlasts the session; the last UNDO_KEEP stay."""
+        noun = UNDO_NOUN.get(table, table)
+        cur = self._db.execute(
+            "INSERT INTO undo_log(label, ts, tbl, rows_json, profile_json, created_json) VALUES(?,?,?,?,?,?)",
+            (label or noun, now_ms(), table, json.dumps(rows, default=str), json.dumps(profile), json.dumps(created)),
+        )
+        self._db.execute("DELETE FROM undo_log WHERE seq<=?", (cur.lastrowid - UNDO_KEEP,))
+        self._db.commit()
+        return cur.lastrowid
+
+    def _take(self, table, key, values, profile=None, label=""):
         rows = [dict(r) for v in values for r in self._db.execute(f"SELECT * FROM {table} WHERE {key}=?", (v,))]
         self._db.executemany(f"DELETE FROM {table} WHERE {key}=?", [(v,) for v in values])
-        self._db.commit()
-        self._undo_seq += 1
-        self._undo[self._undo_seq] = (table, rows, profile, ())
-        for old in sorted(self._undo)[
-            :-20
-        ]:  # ponytail: last 20 deletes per session; persist if undo must survive restarts
-            del self._undo[old]
-        return dict(ok=True, undo=self._undo_seq, n=len(rows))
+        token = self._stash(table, rows, profile, [], label or f"Deleted {UNDO_NOUN.get(table, table)}")
+        return dict(ok=True, undo=token, n=len(rows))
 
     @_locked
     def undo(self, token):
         if isinstance(token, (list, tuple)):
             done = [self.undo(t) for t in reversed(token)]
             return dict(ok=all(r["ok"] for r in done), n=sum(r.get("n", 0) for r in done))
-        entry = self._undo.pop(int(token), None)
+        entry = self._db.execute("SELECT * FROM undo_log WHERE seq=?", (int(token),)).fetchone()
         if not entry:
             return dict(ok=False, error="That can no longer be undone")
-        table, rows, profile, created = entry
+        table, rows = entry["tbl"], json.loads(entry["rows_json"])
+        profile, created = json.loads(entry["profile_json"]), json.loads(entry["created_json"])
         with self._db:
-            for uid in created:  # rows the change added: undoing it removes them
-                self._db.execute(f"DELETE FROM {table} WHERE uid=?", (uid,))
-            for r in rows:
-                cols = ",".join(f'"{c}"' for c in r)
-                self._db.execute(
-                    f"INSERT OR REPLACE INTO {table}({cols}) VALUES({','.join('?' * len(r))})", list(r.values())
-                )
-        if profile:
-            P.update(profile)
+            self._db.execute("DELETE FROM undo_log WHERE seq=?", (entry["seq"],))
+            parts = rows if table == "*" else [dict(tbl=table, rows=rows, profile=profile, created=created)]
+            for part in reversed(parts):
+                for uid in part["created"]:  # rows the change added: undoing it removes them
+                    self._db.execute(f"DELETE FROM {part['tbl']} WHERE uid=?", (uid,))
+                for r in part["rows"]:
+                    cols = ",".join(f'"{c}"' for c in r)
+                    self._db.execute(
+                        f"INSERT OR REPLACE INTO {part['tbl']}({cols}) VALUES({','.join('?' * len(r))})",
+                        list(r.values()),
+                    )
+                if part["profile"]:
+                    P.update(part["profile"])
+        if any(p["profile"] for p in parts):
             self._save()
-        return dict(ok=True, n=len(rows))
+        return dict(ok=True, n=sum(len(p["rows"]) for p in parts))
+
+    def _group(self, tokens, label):
+        """Fold several undo entries into one, so a swap or a bulk change comes back in a single step."""
+        tokens = [t for t in tokens if t]
+        if len(tokens) < 2:
+            return tokens[0] if tokens else None
+        marks = ",".join("?" * len(tokens))
+        parts = [
+            dict(tbl=r["tbl"], rows=json.loads(r["rows_json"]), profile=json.loads(r["profile_json"]),
+                 created=json.loads(r["created_json"]))
+            for r in self._db.execute(f"SELECT * FROM undo_log WHERE seq IN ({marks}) ORDER BY seq", tokens)
+        ]
+        self._db.execute(f"DELETE FROM undo_log WHERE seq IN ({marks})", tokens)
+        return self._stash("*", parts, None, [], label)
+
+    @_locked
+    def history(self):
+        """Read-only: the changes that can still be taken back, newest first."""
+        rows = self._db.execute("SELECT seq, label, ts FROM undo_log ORDER BY seq DESC").fetchall()
+        return dict(ok=True, items=[dict(seq=r["seq"], label=r["label"], ts=r["ts"]) for r in rows])
 
     def import_files(self):
         import webview
@@ -6708,8 +7049,8 @@ class Api:
     # ---- plan
     @_locked
     def plan(self):
-        orphans, adapt = [], {}
-        target, weeks = self._plan(orphans=orphans, adapt_info=adapt)
+        orphans, adapt, shelved = [], {}, []
+        target, weeks = self._plan(orphans=orphans, adapt_info=adapt, shelved=shelved)
         rows = self._workouts()
         done_by_day, sports_by_day = {}, {}
         for w in rows:
@@ -6736,6 +7077,8 @@ class Api:
                         parts=set_rows(s[4], s[1]) if s[2] else None,
                         **sess_ref(s),
                         edited=str(s[5]).startswith("e:"),
+                        # survives a move (p: becomes e:), so the page can slide the card instead of redrawing it
+                        key=(edits.get(str(s[5])[2:], {}).get("src") or s[5]) if isinstance(s[5], str) else None,
                         pinned=bool(edits.get(str(s[5])[2:], {}).get("pinned")),
                         done=s[1] in sports_by_day.get(d.isoformat(), ()),
                         fuel=fuel_session(P, s[1], s[2]),
@@ -6796,6 +7139,7 @@ class Api:
             plan_race=next((r["id"] for r in races if r["uid"] == P.get("plan_race")), 0),
             plan_goal=P.get("plan_goal") or "",
             orphans=[orphan_row(e) for e in orphans],
+            shelf=shelf_rows(shelved, today),
             adapt=dict(
                 adapt,
                 note=f"You've averaged {adapt['actual_h']} of {adapt['planned_h']} planned hours over the last "
@@ -6836,7 +7180,7 @@ class Api:
         was = {k: P[k] for k in ("plan_race", "plan_goal")}
         P.update(plan_race=next((r["uid"] for r in self._races() if r["id"] == int(rid or 0)), ""), plan_goal="")
         self._save()
-        return dict(ok=True, undo=self._remember("plan_weeks", [], profile=was))
+        return dict(ok=True, undo=self._remember("plan_weeks", [], profile=was, label="Changed the plan target"))
 
     @_locked
     def set_plan_goal(self, uid):
@@ -6846,24 +7190,22 @@ class Api:
         was = {k: P[k] for k in ("plan_race", "plan_goal")}
         P.update(plan_goal=uid or "", plan_race="" if uid else P["plan_race"])
         self._save()
-        return dict(ok=True, undo=self._remember("plan_weeks", [], profile=was))
+        return dict(ok=True, undo=self._remember("plan_weeks", [], profile=was, label="Changed the plan target"))
 
     # ---- plan edits: the athlete moves, pins, skips and adds sessions; the generator rebuilds around them
-    def _remember(self, table, before, created=(), profile=None):
+    def _remember(self, table, before, created=(), profile=None, label=""):
         """Undo token for a change that is not a delete: `before` rows are put back, `created` uids removed,
         and `profile` keys restored."""
-        self._undo_seq += 1
-        self._undo[self._undo_seq] = (table, before, profile, tuple(created))
-        for old in sorted(self._undo)[:-20]:
-            del self._undo[old]
-        return self._undo_seq
+        return self._stash(
+            table, before, profile, list(created), label or f"Changed {UNDO_NOUN.get(table, table)}"
+        )
 
     def _find(self, ref):
         weeks = self._plan()[1]
         sess = next((s for w in weeks for s in w["sessions"] if isinstance(ref, str) and s[5] == ref), None)
         return sess, weeks
 
-    def _put_edit(self, ref, sess, **f):
+    def _put_edit(self, ref, sess, label="", **f):
         """Change the edit behind `ref`, or start one over the generated session `sess`. Returns an undo token."""
         mine = ref.startswith("e:")
         old = self._db.execute(
@@ -6873,14 +7215,14 @@ class Api:
             self._db.execute(
                 f"UPDATE plan_edits SET {', '.join(k + '=?' for k in f)} WHERE uid=?", [*f.values(), old["uid"]]
             )
-            token = self._remember("plan_edits", [dict(old)])
+            token = self._remember("plan_edits", [dict(old)], label=label)
         else:
             uid = uuid.uuid4().hex
             row = {**dict(uid=uid, src=ref, date=sess[0].isoformat(), pinned=0), **f}
             self._db.execute(
                 f"INSERT INTO plan_edits({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values())
             )
-            token = self._remember("plan_edits", [], [uid])
+            token = self._remember("plan_edits", [], [uid], label=label)
         self._db.commit()
         return token
 
@@ -6900,19 +7242,21 @@ class Api:
             return dict(ok=False, error="That session isn't in the plan any more")
         if any(s[1] == "Race" and s[0] == day for w in weeks for s in w["sessions"]):
             return dict(ok=False, error="That's race day")
+        label = f"Moved {sess[1]} to {day:%a %b} {day.day}"
         if sched_uid(ref):
             row = self._db.execute("SELECT * FROM scheduled WHERE uid=?", (sched_uid(ref),)).fetchone()
             self._db.execute("UPDATE scheduled SET date=? WHERE uid=?", (day.isoformat(), row["uid"]))
             self._db.commit()
-            return dict(ok=True, undo=self._remember("scheduled", [dict(row)]))
-        return dict(ok=True, undo=self._put_edit(ref, sess, date=day.isoformat()))
+            return dict(ok=True, undo=self._remember("scheduled", [dict(row)], label=label))
+        return dict(ok=True, undo=self._put_edit(ref, sess, label, date=day.isoformat()))
 
     @_locked
     def pin_session(self, ref, on=True):
         sess, _ = self._find(ref)
         if not sess or sess[1] == "Race" or sched_uid(ref):
             return dict(ok=False, error="Only the plan's own sessions can be pinned: yours already stay put")
-        return dict(ok=True, undo=self._put_edit(ref, sess, pinned=int(bool(on))))
+        label = f"{'Pinned' if on else 'Unpinned'} {sess[1]}"
+        return dict(ok=True, undo=self._put_edit(ref, sess, label, pinned=int(bool(on))))
 
     @_locked
     def skip_session(self, ref):
@@ -6920,12 +7264,55 @@ class Api:
         if not sess or sess[1] == "Race":
             return dict(ok=False, error="That session isn't in the plan any more")
         if sched_uid(ref):
-            return self._take("scheduled", "uid", [sched_uid(ref)])
-        if ref.startswith("e:"):
-            row = self._db.execute("SELECT src FROM plan_edits WHERE uid=?", (ref[2:],)).fetchone()
-            if not row["src"]:  # one the athlete added: skipping it just removes it
-                return self._take("plan_edits", "uid", [ref[2:]])
-        return dict(ok=True, undo=self._put_edit(ref, sess, date=None))
+            return self._take("scheduled", "uid", [sched_uid(ref)], label=f"Skipped {sess[1]}")
+        return dict(ok=True, undo=self._put_edit(ref, sess, f"Skipped {sess[1]}", date=None))
+
+    @_locked
+    def unshelve(self, uid, date):
+        """Put a set-aside session on `date`."""
+        try:
+            day = dt.date.fromisoformat(date)
+        except (ValueError, TypeError):
+            return dict(ok=False, error="Pick a day")
+        row = self._db.execute("SELECT * FROM plan_edits WHERE uid=? AND date IS NULL", (uid,)).fetchone()
+        if not row:
+            return dict(ok=False, error="That session isn't on the shelf any more")
+        weeks = self._plan()[1]
+        if not any(w["start"] <= day < w["start"] + 7 * ONE for w in weeks):
+            return dict(ok=False, error="That day is outside the plan")
+        if any(s[1] == "Race" and s[0] == day for w in weeks for s in w["sessions"]):
+            return dict(ok=False, error="That's race day")
+        self._db.execute("UPDATE plan_edits SET date=? WHERE uid=?", (day.isoformat(), uid))
+        self._db.commit()
+        label = f"Put a session back on {day:%a %b} {day.day}"
+        return dict(ok=True, undo=self._remember("plan_edits", [dict(row)], label=label))
+
+    @_locked
+    def discard_shelved(self, uid):
+        """Let go of a session the athlete added and then set aside. The plan's own stay on the shelf."""
+        row = self._db.execute("SELECT src FROM plan_edits WHERE uid=? AND date IS NULL", (uid,)).fetchone()
+        if not row or row["src"]:
+            return dict(ok=False, error="Only sessions you added can be thrown away")
+        return self._take("plan_edits", "uid", [uid], label="Threw away a session")
+
+    @_locked
+    def swap_sessions(self, a, b):
+        """Trade the days of two sessions. One undo takes both back."""
+        sa, _ = self._find(a)
+        sb, _ = self._find(b)
+        if not sa or not sb or "Race" in (sa[1], sb[1]):
+            return dict(ok=False, error="That session isn't in the plan any more")
+        if sa[0] == sb[0]:
+            return dict(ok=True, undo=None)
+        label = f"Swapped {sa[1]} and {sb[1]}"
+        tokens = []
+        for ref, day in ((b, sa[0]), (a, sb[0])):
+            r = self.move_session(ref, day.isoformat())
+            if not r.get("ok"):
+                self.undo(tokens)
+                return r
+            tokens.append(r["undo"])
+        return dict(ok=True, undo=self._group(tokens, label))
 
     @_locked
     def reset_session(self, ref):
@@ -7024,7 +7411,7 @@ class Api:
         races = {s[0] for s in wb["sessions"] if s[1] == "Race"}
         for s in wb["sessions"]:  # the plan's own sessions in the target week step aside
             if s[0] >= today and s[1] != "Race" and isinstance(s[5], str) and s[5].startswith("p:"):
-                made.append(self._insert_edit(None, None, None, None, None, src=s[5]))
+                made.append(self._insert_edit(None, None, None, None, None, group="copy", src=s[5]))
         for s in wa["sessions"]:
             day = b + (s[0] - a)
             if s[1] not in ("Race", "Rest", "Mobility") and day >= today and day not in races:
@@ -7105,6 +7492,18 @@ class Api:
             token = self._remember("day_locks", [], [uid])
         self._db.commit()
         return dict(ok=True, undo=token)
+
+    @_locked
+    def block_days(self, dates, kind, note=""):
+        """Block a run of days in one go: one undo for all of them."""
+        tokens = []
+        for d in list(dates)[:60]:
+            r = self.set_lock(d, kind, note)
+            if not r.get("ok"):
+                self.undo(tokens)
+                return r
+            tokens.append(r["undo"])
+        return dict(ok=True, undo=self._group(tokens, f"Blocked {len(tokens)} days"))
 
     @_locked
     def delete_lock(self, date):
@@ -7321,7 +7720,9 @@ class Api:
         key = (len(rows), rows[0]["id"] if rows else 0, P["run_thr_pace"], P["ftp"], P["css"], P["lthr"])
         if key != getattr(self, "_drift_key", None):  # records() is not cheap and this runs on every page
             self._drift_key = key
-            self._drift = threshold_drift(P, records(rows, self._races(forecast=False), P)) if rows else []
+            self._drift = (
+                threshold_drift(P, records(rows, self._races(forecast=False), P), _FTP_FLOOR[0]) if rows else []
+            )
         for x in self._drift:
             items.append(dict(kind="drift", text=f"{x['what']} may be low", go="coach", level="info",
                               tip=f"{x['why']} Suggested: {x['suggested']} (now {x['now']})."))
@@ -7476,8 +7877,8 @@ class Api:
         return self.apply_change(c)
 
     @_locked
-    def apply_change(self, change):
-        """Write a what-if change into the plan for real; the undo token is a list, newest change last."""
+    def apply_change(self, change, label=""):
+        """Write a what-if change into the plan for real; one undo token takes the whole change back."""
         c = clean_change(change)
         if not c:
             return dict(ok=False, error="There's nothing to change")
@@ -7505,7 +7906,8 @@ class Api:
             take(self.set_week(w["start"], w["mode"], w["budget_h"]))
         if c.get("profile"):
             take(self.save_plan_tuning(dict({k: P[k] for k in TUNING_KEYS}, **c["profile"])))
-        return dict(ok=True, undo=tokens, skipped=["race_date"] if c.get("race_date") else [])
+        undo = self._group(tokens, label or change_summary(c).capitalize())
+        return dict(ok=True, undo=undo, skipped=["race_date"] if c.get("race_date") else [])
 
     @_locked
     def what_if(self, change=None):
@@ -7544,9 +7946,24 @@ class Api:
         if change.get("race_date"):
             tid = (pick_target(p, races, today) or {}).get("id")
             new_races = [dict(r, date=change["race_date"]) if r["id"] == tid else r for r in races]
+        extra = {}
+        if change.get("issues"):
+            now = self._issues()
+            for x in change["issues"]:
+                kind = x.get("kind") if x.get("kind") in ISSUE_KINDS else "Injury"
+                row = dict(
+                    id=x.get("id") or -1, kind=kind, name="Preview", area=x.get("area") or "", side="",
+                    severity=min(5, max(1, int(x.get("severity") or 1))),
+                    sports=[z for z in ALL_SPORTS if z in (x.get("sports") or [])] if kind != "Illness" else [],
+                    start=x.get("start") or today.isoformat(), end=x.get("end") or None,
+                    ramp_days=x.get("ramp_days"), notes="",
+                )
+                now = [i for i in now if i["id"] != row["id"]] + [row]
+            extra["issues"] = now
         t0, w0 = self._plan(series, races=races, scheduled=sched, edits=edits, locks=locks, weeks_cfg=wcfg)
         t1, w1 = self._plan(
-            series, p=p, races=new_races, scheduled=new_sched, edits=new_edits, locks=new_locks, weeks_cfg=new_wcfg
+            series, p=p, races=new_races, scheduled=new_sched, edits=new_edits, locks=new_locks, weeks_cfg=new_wcfg,
+            **extra,
         )
 
         def race_day(t, w, pp):
@@ -7603,7 +8020,14 @@ class Api:
                     )
                 )
         quiet = bool(delta) and abs(delta["form"]) < 1 and abs(delta["ctl"]) < 0.5
-        return dict(ok=True, base=a, new=b, delta=delta, warnings=warns, weekly=weekly[:3], quiet=quiet)
+        # the daily rehab sessions are not training, and counting them would make an injury look like extra load
+        ahead = lambda w: round(
+            sum(
+                [sum(z[2] for z in x["sessions"] if z[1] not in ("Race", "Mobility")) / 3600
+                 for x in w if x["start"] + 6 * ONE >= today][:4]
+            ), 1)
+        return dict(ok=True, base=a, new=b, delta=delta, warnings=warns, weekly=weekly[:3], quiet=quiet,
+                    hours=[ahead(w0), ahead(w1)])
 
     @_locked
     def spacing_fixes(self):
@@ -7679,6 +8103,7 @@ class Api:
         )
 
     @_locked
+    @_bests_after
     def save_race(self, f):
         try:
             name = (f.get("name") or "").strip()
@@ -7850,16 +8275,29 @@ class Api:
             for label, key, delta, need in tries:
                 if need and need not in sp:
                     continue
-                q = dict(P)
+                q = dict(P, ftp=eff_ftp(P))
                 q[key] += delta
                 if key == "run_thr_pace":
                     q["recent_race_km"] = 0
                     q["_no_anchor"] = True
-                gain = pr["total"] - predict(q, r, ctl_race)["total"]
+                # a pace change drops the benchmark race, so measure it against the same un-anchored baseline
+                free = dict(P, recent_race_km=0, _no_anchor=True)
+                base = predict(free, r, ctl_race)["total"] if key == "run_thr_pace" else pr["total"]
+                gain = base - predict(q, r, ctl_race)["total"]
                 if gain > 0.5:
                     needle.append(dict(label=label, secs=round(gain), time=hms(gain)))
             needle.sort(key=lambda x: -x["secs"])
+        levers = (
+            [
+                dict(key=k, label=lab, unit=u, lo=lo, hi=hi, step=st)
+                for k, lab, u, _pk, _f, lo, hi, st, need in race_levers()
+                if not need or need in {l["sport"] for l in r["legs"]}
+            ]
+            if pr["modelled"]
+            else []
+        )
         checked = set(P.get("checklist", []))
+        mine = [x for x in P.get("check_extra", []) if x[0] == r["uid"]]
         groups = [g for g in dict.fromkeys([l["sport"] for l in r["legs"]]) if g in CHECK_ITEMS] + ["General"]
         backyard = None
         if "backyard" in r["name"].lower():
@@ -7933,6 +8371,7 @@ class Api:
                 else "your recent race" if P["recent_race_km"] > 0 else "threshold pace ≈ 1 h race pace"
             ),
             needle=needle,
+            levers=levers,
             backyard=backyard,
             goal=goal,
             notes=r["notes"],
@@ -7944,13 +8383,102 @@ class Api:
                 dict(
                     group=g,
                     items=[
-                        dict(key=f"{r['uid']}:{g}:{t}", text=t, done=f"{r['uid']}:{g}:{t}" in checked)
-                        for t in CHECK_ITEMS[g]
+                        dict(key=f"{r['uid']}:{g}:{t}", text=t, done=f"{r['uid']}:{g}:{t}" in checked, custom=custom)
+                        for t, custom in [(t, False) for t in CHECK_ITEMS.get(g, [])]
+                        + [(x[2], True) for x in mine if (x[1] if x[1] in groups else "General") == g]
                     ],
                 )
                 for g in groups
             ],
         )
+
+    def _race_ctl(self, r):
+        """Fitness on the morning of race `r`: the plan's projection when it is the target, today's otherwise."""
+        series = self._series()
+        target, weeks = self._plan(series)
+        if target and target["id"] == r["id"]:
+            proj = self._projection(target, weeks, series)
+            return proj[-1][1] if proj else series[-1][1]
+        return series[-1][1]
+
+    @_locked
+    def race_whatif(self, rid, deltas):
+        """Read-only: the prediction for race `rid` if the levers in `deltas` ({key: change in display units}, keys
+        from race_levers) were different. Nothing is written."""
+        r = next((x for x in self._races() if x["id"] == int(rid)), None)
+        if not r:
+            return dict(ok=False, error="No such race")
+        ctl = self._race_ctl(r)
+        shown, q, anchored = predict(P, r, ctl), dict(P, ftp=eff_ftp(P)), False
+        for key, _lab, _u, pk, f, *_ in race_levers():
+            try:
+                d = float((deltas or {}).get(key) or 0)
+            except (TypeError, ValueError):
+                d = 0.0
+            if d:
+                q[pk] += d * f
+                if pk == "run_thr_pace":
+                    q["recent_race_km"], q["_no_anchor"], anchored = 0, True, True
+        # a pace change drops the benchmark race the prediction leans on, so the change is measured against the
+        # same un-anchored baseline (as the needle list does) and applied to the prediction on screen
+        base = predict(dict(P, recent_race_km=0, _no_anchor=True) if anchored else P, r, ctl)
+        new = predict(q, r, ctl)
+        ok = shown["total"] and base["total"] and new["total"]
+        gain = round(base["total"] - new["total"]) if ok else 0
+        total = shown["total"] - gain if ok else None
+        k = total / new["total"] if total else 1  # legs follow the total when the baseline was un-anchored
+        legs = [dict(sport=sg["sport"], time=hms(sg["secs"] * k) if sg["secs"] else "—") for sg in new["segs"]
+                if sg["kind"] != "trans"]
+        return dict(ok=True, total=hms(total) if total else "—", gain=gain, legs=legs)
+
+    @_locked
+    def move_race(self, rid, date):
+        """Change a race's date; one undo puts it back."""
+        try:
+            day = dt.date.fromisoformat(str(date)).isoformat()
+        except ValueError:
+            return dict(ok=False, error="That isn't a date")
+        before = [dict(x) for x in self._db.execute("SELECT * FROM races WHERE id=?", (int(rid),))]
+        if not before:
+            return dict(ok=False, error="No such race")
+        self._db.execute("UPDATE races SET date=? WHERE id=?", (day, int(rid)))
+        self._db.commit()
+        return dict(ok=True, undo=self._remember("races", before, label=f"Moved {before[0]['name']} to {day}"))
+
+    @_locked
+    def set_race_priority(self, rid, priority):
+        before = [dict(x) for x in self._db.execute("SELECT * FROM races WHERE id=?", (int(rid),))]
+        if not before or priority not in ("A", "B", "C"):
+            return dict(ok=False, error="Pick A, B or C")
+        self._db.execute("UPDATE races SET priority=? WHERE id=?", (priority, int(rid)))
+        self._db.commit()
+        label = f"{before[0]['name']} is now a {priority} race"
+        return dict(ok=True, undo=self._remember("races", before, label=label))
+
+    @_locked
+    def add_check(self, rid, group, text):
+        """Your own checklist item for one race."""
+        r = next((x for x in self._races() if x["id"] == int(rid)), None)
+        text = (text or "").strip()[:80]
+        if not r or not text:
+            return dict(ok=False, error="Type what to pack")
+        was = list(P.get("check_extra", []))
+        if any(x[0] == r["uid"] and x[2].lower() == text.lower() for x in was):
+            return dict(ok=False, error="That's already on the list")
+        P["check_extra"] = was + [[r["uid"], group or "General", text]]
+        self._save()
+        return dict(ok=True, undo=self._stash("profile", [], {"check_extra": was}, [], f"Added {text} to the list"))
+
+    @_locked
+    def delete_check(self, rid, text):
+        r = next((x for x in self._races() if x["id"] == int(rid)), None)
+        was = list(P.get("check_extra", []))
+        now = [x for x in was if not (r and x[0] == r["uid"] and x[2] == text)]
+        if len(now) == len(was):
+            return dict(ok=False, error="That item isn't one of yours")
+        P["check_extra"] = now
+        self._save()
+        return dict(ok=True, undo=self._stash("profile", [], {"check_extra": was}, [], f"Removed {text} from the list"))
 
     @_locked
     def toggle_check(self, key, on):
@@ -7960,26 +8488,48 @@ class Api:
         self._save()
 
     # ---- nutrition
+    def _nut_sess(self, day, workouts, weeks, hours=None):
+        """(sessions, source label, planned rows) feeding one day's targets. `hours` is a what-if: one steady session
+        of that length in the athlete's first sport, instead of whatever is logged or planned."""
+        planned = [s for w in weeks for s in w["sessions"] if s[0] == day]
+        logged = [w for w in workouts if w["date"] == day.isoformat()]
+        if hours is not None:
+            sport, dur = (P["sports"] or ["Run"])[0], max(0.0, float(hours)) * 3600
+            return ([(sport, dur, estimate_kcal(P, sport, dur), 0.72)] if dur else []), "What if", planned
+        if logged:
+            sess = [(w["sport"], w["dur_s"], w["kcal"] or 0, rpe_if(w["rpe"]) if w["rpe"] else 0.72) for w in logged]
+            return sess, "Logged workouts", planned
+        sess = [
+            (s[1], s[2], estimate_kcal(P, s[1], s[2], tss=s[3]), math.sqrt(s[3] / (s[2] / 36)) if s[2] else 0.7)
+            for s in planned
+            if s[1] not in ("Race", "Rest")
+        ]
+        return sess, "Planned sessions" if sess else "Rest day", planned
+
     @_locked
-    def nutrition(self, day=None):
+    def nutrition(self, day=None, hours=None):
         try:
             day = dt.date.fromisoformat(day)
         except (TypeError, ValueError):
             day = dt.date.today()
-        logged = [w for w in self._workouts() if w["date"] == day.isoformat()]
+        try:
+            hours = None if hours in (None, "") else float(hours)
+        except (TypeError, ValueError):
+            hours = None
         _, weeks = self._plan()
-        planned = [s for w in weeks for s in w["sessions"] if s[0] == day]
-        if logged:
-            sess = [(w["sport"], w["dur_s"], w["kcal"] or 0, rpe_if(w["rpe"]) if w["rpe"] else 0.72) for w in logged]
-            src = "Logged workouts"
-        else:
-            sess = [
-                (s[1], s[2], estimate_kcal(P, s[1], s[2], tss=s[3]), math.sqrt(s[3] / (s[2] / 36)) if s[2] else 0.7)
-                for s in planned
-                if s[1] not in ("Race", "Rest")
-            ]
-            src = "Planned sessions" if sess else "Rest day"
+        rows = self._workouts()
+        sess, src, planned = self._nut_sess(day, rows, weeks, hours)
         n = daily_nutrition(P, [(s, d, k) for s, d, k, _ in sess], P["goal"])
+        monday = day - dt.timedelta(days=day.weekday())
+        strip = []
+        for i in range(7):
+            dd = monday + dt.timedelta(days=i)
+            ss = self._nut_sess(dd, rows, weeks, hours if dd == day else None)[0]
+            nn = daily_nutrition(P, [(s, d, k) for s, d, k, _ in ss], P["goal"])
+            strip.append(
+                dict(date=dd.isoformat(), dow=f"{dd:%a}", kcal=round(nn["kcal"]), carbs=round(nn["carbs"]),
+                     hours=round(nn["hours"], 1), sel=dd == day)
+            )
         kg = P["weight_kg"]
         macros = [
             dict(name="Carbs", g=round(n["carbs"]), gkg=round(n["carbs"] / kg, 1), kcal=round(4 * n["carbs"])),
@@ -8022,6 +8572,7 @@ class Api:
             goal=P["goal"],
             activity=P["activity"],
             hours=round(n["hours"], 1),
+            strip=strip,
             kcal=round(n["kcal"]),
             bmr=round(n["bmr"]),
             life=round(n["life"]),
@@ -8176,6 +8727,13 @@ class Api:
             until=f"{end:%b} {end.day}" if end else "",
             sev_label=SEVERITY[i["severity"]],
             sev_help=SEVERITY_HELP[i["severity"]],
+            log=[
+                [r["date"], r["severity"]]
+                for r in self._db.execute(
+                    "SELECT date, severity FROM issue_log WHERE issue_id=? ORDER BY date, rowid", (i["id"],)
+                )
+            ]
+            or [[i["start"], i["severity"]]],
             rehab=area[1] if area else "",
             red_flags=area[2] if area else "",
             guidance=KIND_GUIDANCE.get(i["kind"], KIND_GUIDANCE["Other"]),
@@ -8241,6 +8799,14 @@ class Api:
                 'INSERT INTO issues(kind,name,area,side,severity,sports,start,"end",notes) VALUES(?,?,?,?,?,?,?,?,?)',
                 rec,
             )
+        iid = int(f["id"]) if f.get("id") else self._db.execute("SELECT max(id) FROM issues").fetchone()[0]
+        last = self._db.execute(
+            "SELECT severity FROM issue_log WHERE issue_id=? ORDER BY date DESC, rowid DESC LIMIT 1", (iid,)
+        ).fetchone()
+        if not last or last[0] != sev:
+            self._db.execute(
+                "INSERT INTO issue_log(issue_id, date, severity) VALUES(?,?,?)", (iid, dt.date.today().isoformat(), sev)
+            )
         self._db.commit()
         return dict(ok=True)
 
@@ -8282,10 +8848,34 @@ class Api:
         )
 
     @_locked
+    def set_workout_gear(self, wid, gear_id):
+        """Point one workout at a different piece of kit (or none); one undo puts it back."""
+        before = [dict(x) for x in self._db.execute("SELECT * FROM workouts WHERE id=?", (int(wid),))]
+        if not before:
+            return dict(ok=False, error="No such workout")
+        gid = int(gear_id) if gear_id not in (None, "") else None
+        if gid is not None and not any(g["id"] == gid and before[0]["sport"] in g["sports"] for g in self._gear()):
+            return dict(ok=False, error="That gear isn't for this sport")
+        self._db.execute("UPDATE workouts SET gear_id=? WHERE id=?", (gid, int(wid)))
+        self._db.commit()
+        return dict(ok=True, undo=self._remember("workouts", before, label="Changed a workout's gear"))
+
+    @_locked
     def gear(self):
         totals = self._gear_totals()
+        t = dt.date.today()
+        idx = [t.year * 12 + t.month - 1 - k for k in range(11, -1, -1)]
+        months = [f"{i // 12}-{i % 12 + 1:02d}" for i in idx]
+        scale, per = (LIN["dist"][0] if imp() else 1), {}
+        for r in self._db.execute(
+            "SELECT gear_id, substr(date,1,7) m, SUM(dist_km) km FROM workouts WHERE gear_id IS NOT NULL GROUP BY 1, 2"
+        ):
+            per[(r["gear_id"], r["m"])] = r["km"] or 0
         return dict(
-            items=[self._gear_view(g, totals) for g in self._gear()],  # already active-first, then by name
+            items=[
+                dict(self._gear_view(g, totals), monthly=[round(per.get((g["id"], m), 0) * scale) for m in months])
+                for g in self._gear()  # already active-first, then by name
+            ],
             sports=self._sports(),
             dist_unit=unit("dist"),
         )
@@ -8719,6 +9309,7 @@ class Api:
                     done=today.isoformat() in done,
                     streak=streak(done, sched, today),
                     week=week,
+                    done84=sorted(x for x in done if x > (today - dt.timedelta(days=84)).isoformat()),
                 )
             )
         tonight = bedtime_before(P, today + ONE)
@@ -8976,6 +9567,14 @@ class Api:
             "INSERT OR REPLACE INTO habit_log(hkey, habit, date, done) VALUES(?,?,?,?)",
             (f"{uid}:{date}", uid, date, 1 if done else 0),
         )
+        self._db.commit()
+        return dict(ok=True)
+
+    @_locked
+    def reorder_habits(self, uids):
+        """The athlete's own order for the habit list; uids not named keep their place after the named ones."""
+        for n, u in enumerate(uids or []):
+            self._db.execute("UPDATE habits SET sort=? WHERE uid=?", (n, str(u)))
         self._db.commit()
         return dict(ok=True)
 
@@ -9239,6 +9838,58 @@ class Api:
     def records(self):
         return records(self._workouts(), self._races(forecast=False), P)
 
+    def _bests(self):
+        r = records(self._workouts(), self._races(forecast=False), P)
+        return {f"{e['sport']}:{e['key']}": e for e in r["events"] + r["multi"] + r["off_bike"] if e.get("have")}
+
+    def _new_bests(self, before):
+        """Efforts that now beat what `before` held, with the rank each moved between. A first result for an event
+        is reported too (first=True) but is not a promotion."""
+        out = []
+        for k, e in self._bests().items():
+            old = before.get(k)
+            if old and e["secs"] >= old["secs"] - 0.5:
+                continue
+            moved = bool(old) and (old["tier"], old["div"]) != (e["tier"], e["div"])
+            out.append(
+                dict(
+                    key=k,
+                    sport=e["sport"],
+                    label=e["label"],
+                    time=e["time"],
+                    prev=old["time"] if old else "",
+                    gain=hms(old["secs"] - e["secs"]) if old else "",
+                    gain_s=round(old["secs"] - e["secs"]) if old else 0,
+                    tier=e["tier"],
+                    div=e["div"],
+                    colour=e["colour"],
+                    old_tier=old["tier"] if old else "",
+                    old_div=old["div"] if old else "",
+                    old_colour=old["colour"] if old else "",
+                    promoted=moved,
+                    first=not old,
+                    wid=e.get("wid", 0),
+                )
+            )
+        return out
+
+    @_locked
+    def pr_history(self, sport, key):
+        """Read-only: every dated effort at an event and the running best, for the step chart in its detail."""
+        rows, races = self._workouts(), self._races(forecast=False)
+        found, _ = _efforts(rows, races, P)
+        multi, _off = _multi_efforts(races)
+        hits = found.get((sport, key)) or multi.get(key) or []
+        hits = sorted((h for h in hits if h[1]), key=lambda h: (h[1], h[0]))
+        by_day = {}
+        for secs, date, *_ in hits:
+            by_day[date] = min(secs, by_day.get(date, secs))
+        best, out = None, []
+        for date, secs in sorted(by_day.items()):
+            best = secs if best is None else min(best, secs)
+            out.append(dict(date=date, secs=round(secs, 1), best=round(best, 1), pr=secs <= best))
+        return dict(ok=True, points=out)
+
     @_locked
     def estimate(self, f):
         """A predicted time for any distance or event: the same model the race predictions use, at today's fitness."""
@@ -9299,19 +9950,7 @@ class Api:
     @_locked
     def apply_test(self, kind, v):
         try:
-            if kind == "ftp":
-                upd = {"ftp": round(float(v[0]) * 0.95)}
-            elif kind == "lthr":
-                upd = {"lthr": float(v[0])}
-            elif kind == "maxhr":
-                upd = {"max_hr": float(v[0])}
-            elif kind == "css":
-                upd = {"css": (parse_clock(v[0]) - parse_clock(v[1])) / 2 / (YD if imp() else 1)}
-            else:
-                d, t = from_ui("dist", v[0]), parse_clock(v[1])
-                upd = {"run_thr_pace": threshold_from_race(d, t), "recent_race_km": d, "recent_race_s": t}
-            if any(not x > 0 for x in upd.values()):
-                raise ValueError("Result must be positive")
+            upd = test_update(kind, v)
         except (ValueError, ZeroDivisionError, IndexError) as e:
             return dict(ok=False, error=str(e) or "Check the inputs")
         P.update(upd)
@@ -9324,6 +9963,42 @@ class Api:
             "run_thr_pace": lambda x: f"Threshold {fd('pace', x)}",
         }
         return dict(ok=True, msg=", ".join(show[k](x) for k, x in upd.items() if k in show))
+
+    @_locked
+    def preview_test(self, kind, vals):
+        """Read-only: the zones before and after a test result, and what it does to the target race's prediction."""
+        try:
+            upd = test_update(kind, vals)
+        except (ValueError, ZeroDivisionError, IndexError, TypeError):
+            return dict(ok=False, error="")
+        return self._preview(upd)
+
+    @_locked
+    def preview_drift(self, key, value):
+        """Read-only: what accepting a suggested threshold (apply_drift) would do to zones and the target race."""
+        if key not in ("run_thr_pace", "ftp", "css") or not float(value) > 0:
+            return dict(ok=False, error="")
+        return self._preview({key: float(value)})
+
+    def _preview(self, upd):
+        p2, race = dict(P, **upd), None
+        target = pick_target(P, self._races(), dt.date.today())
+        if target:
+            ctl = self._race_ctl(target)
+            a, b = predict(P, target, ctl)["total"], predict(p2, target, ctl)["total"]
+            if a and b:
+                race = dict(name=target["name"], before=hms(a), after=hms(b), diff_s=round(b - a))
+        return dict(ok=True, before=zones(P), after=zones(p2), race=race)
+
+    @_locked
+    def schedule_test(self, kind, date):
+        """Put a field test on the calendar as a session of its own."""
+        sport, mins, tss, desc = FIELD_TESTS.get(kind, (None,) * 4)
+        if not sport:
+            return dict(ok=False, error="Unknown test")
+        if sport not in P["sports"]:
+            sport = next((x for x in ("Run", "Bike") if x in P["sports"]), sport)
+        return self.add_session(dict(date=date, sport=sport, dur_s=mins * 60, tss=tss, desc=desc))
 
     # ---- profile
     def _profile_value(self, k, kind):

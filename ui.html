@@ -1000,6 +1000,14 @@
         align-items: center;
         gap: 6px;
       }
+      .legend span[data-leg] {
+        cursor: pointer;
+        user-select: none;
+      }
+      .legend span.off {
+        opacity: 0.45;
+        text-decoration: line-through;
+      }
       .legend i {
         width: 10px;
         height: 3px;
@@ -1382,7 +1390,8 @@
       .pm-chip.done {
         opacity: 0.6;
       }
-      .tpl {
+      .tpl,
+      .shelf-chip {
         display: flex;
         flex-direction: column;
         gap: 1px;
@@ -1397,9 +1406,659 @@
         user-select: none;
         -webkit-touch-callout: none;
       }
-      .tpl span {
+      .tpl span,
+      .shelf-chip span {
         color: var(--muted);
         font-size: 11.5px;
+      }
+      .shelf-chip {
+        border-style: dashed;
+        background: var(--well);
+      }
+      html.mobile .pd-shelf {
+        bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+      }
+      html.mobile body.dragging-plan .pdhud {
+        bottom: calc(152px + env(safe-area-inset-bottom, 0px));
+      }
+      html.mobile .pd-selbar {
+        bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+      }
+      /* rank up: the old badge charges its ring, breaks, and the new one slams in and draws itself */
+      .rankup {
+        position: fixed;
+        inset: 0;
+        z-index: 120;
+        display: grid;
+        place-items: center;
+        align-content: center;
+        gap: 6px;
+        padding: 24px 16px calc(24px + env(safe-area-inset-bottom, 0px));
+        text-align: center;
+        cursor: pointer;
+        animation: ru-fade 0.35s ease-out both;
+      }
+      .rankup .ru-wash {
+        position: absolute;
+        inset: 0;
+        z-index: -1;
+        background:
+          radial-gradient(circle at 50% 40%, color-mix(in srgb, var(--c) 30%, transparent), transparent 55%),
+          color-mix(in srgb, var(--bg) 82%, transparent);
+        backdrop-filter: var(--glass-blur);
+        -webkit-backdrop-filter: var(--glass-blur);
+      }
+      .ru-stage {
+        position: relative;
+        width: 220px;
+        height: 220px;
+        display: grid;
+        place-items: center;
+      }
+      .ru-stage > * {
+        grid-area: 1 / 1;
+      }
+      .ru-rays {
+        width: 340px;
+        height: 340px;
+        border-radius: 50%;
+        background: repeating-conic-gradient(color-mix(in srgb, var(--c) 30%, transparent) 0 8deg, transparent 8deg 24deg);
+        mask: radial-gradient(circle, var(--text) 20%, transparent 68%);
+        -webkit-mask: radial-gradient(circle, var(--text) 20%, transparent 68%);
+        opacity: 0;
+        animation: ru-rays-in 0.8s ease-out 1.45s forwards, ru-spin 18s linear 1.45s infinite;
+      }
+      .ru-ring {
+        width: 170px;
+        height: 170px;
+        animation: ru-pop 0.35s ease-out 0.15s both, ru-vanish 0.2s ease-in 1.3s forwards;
+      }
+      .ru-ring circle {
+        fill: none;
+        stroke-width: 5;
+        stroke-linecap: round;
+      }
+      .ru-ring .t {
+        stroke: var(--border2);
+      }
+      .ru-ring .f {
+        stroke: var(--c0);
+        stroke-dasharray: 1;
+        stroke-dashoffset: var(--from);
+        transform: rotate(-90deg);
+        transform-origin: center;
+        animation: ru-charge 0.9s cubic-bezier(0.5, 0, 0.75, 0) 0.4s forwards;
+        filter: drop-shadow(0 0 6px var(--c0));
+      }
+      .ru-old {
+        animation: ru-pop 0.35s ease-out 0.15s both, ru-tremble 0.3s linear 1s, ru-break 0.3s ease-in 1.3s forwards;
+      }
+      .ru-shock {
+        width: 120px;
+        height: 120px;
+        border-radius: 50%;
+        border: 3px solid var(--c);
+        opacity: 0;
+        animation: ru-shock 0.7s ease-out 1.3s;
+      }
+      .ru-flash {
+        width: 220px;
+        height: 220px;
+        border-radius: 50%;
+        background: radial-gradient(circle, color-mix(in srgb, var(--c) 75%, transparent), transparent 65%);
+        opacity: 0;
+        animation: ru-flash 0.6s ease-out 1.3s;
+      }
+      .ru-new {
+        filter: drop-shadow(0 0 18px color-mix(in srgb, var(--c) 60%, transparent));
+        animation: ru-slam 0.6s cubic-bezier(0.2, 1.6, 0.4, 1) 1.32s both;
+      }
+      .ru-new .tb > path:first-child {
+        stroke-dasharray: 1;
+        stroke-dashoffset: 1;
+        animation: ru-draw 0.7s ease-out 1.4s forwards;
+      }
+      .ru-new .tb > g,
+      .ru-new .tb > text {
+        opacity: 0;
+        animation: ru-fade 0.35s ease-out 1.8s forwards;
+      }
+      .ru-p {
+        width: var(--s);
+        height: var(--s);
+        border-radius: 2px;
+        background: var(--c);
+        opacity: 0;
+        animation: ru-burst 1.1s cubic-bezier(0.15, 0.7, 0.3, 1) calc(1.33s + var(--d)) forwards;
+      }
+      .ru-p:nth-child(3n) {
+        border-radius: 50%;
+        background: color-mix(in srgb, var(--c) 50%, var(--text));
+      }
+      .ru-kicker {
+        font-size: 12px;
+        font-weight: 800;
+        text-transform: uppercase;
+        color: var(--c);
+        animation: ru-kick 0.6s ease-out 1.7s both;
+      }
+      .ru-tier {
+        margin: 0;
+        font-size: 34px;
+        letter-spacing: -0.02em;
+        animation: ru-rise 0.5s cubic-bezier(0.2, 1.4, 0.4, 1) 1.85s both;
+      }
+      .ru-from,
+      .ru-stat,
+      .ru-also {
+        color: var(--muted);
+        animation: ru-rise 0.45s ease-out 2s both;
+      }
+      .ru-stat {
+        animation-delay: 2.15s;
+        margin-top: 8px;
+      }
+      .ru-stat b {
+        color: var(--text);
+      }
+      .ru-gain {
+        display: inline-block;
+        margin-left: 6px;
+        padding: 1px 8px;
+        border-radius: var(--r-pill);
+        background: color-mix(in srgb, var(--ok) 16%, transparent);
+        color: var(--ok);
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+      }
+      .ru-also {
+        animation-delay: 2.3s;
+        font-size: 12px;
+        margin-top: 4px;
+      }
+      .ru-acts {
+        display: flex;
+        gap: 8px;
+        justify-content: center;
+        margin-top: 18px;
+        animation: ru-rise 0.4s ease-out 2.5s both;
+      }
+      .rankup.skip *,
+      .rankup.skip {
+        animation-delay: 0s !important;
+        animation-duration: 0.01s !important;
+      }
+      .rankup.skip .ru-rays {
+        animation: ru-rays-in 0.01s forwards, ru-spin 18s linear infinite !important;
+      }
+      .rankup.skip.out,
+      .rankup.out {
+        animation: ru-fade 0.25s ease-in reverse forwards !important;
+      }
+      @keyframes ru-fade {
+        from {
+          opacity: 0;
+        }
+      }
+      @keyframes ru-pop {
+        from {
+          opacity: 0;
+          transform: scale(0.7);
+        }
+      }
+      @keyframes ru-charge {
+        to {
+          stroke-dashoffset: 0;
+          stroke: var(--c);
+        }
+      }
+      @keyframes ru-tremble {
+        25% {
+          transform: translate(-2px, 1px) rotate(-2deg);
+        }
+        50% {
+          transform: translate(2px, -1px) rotate(2deg);
+        }
+        75% {
+          transform: translate(-1px, -1px) rotate(-1deg);
+        }
+      }
+      @keyframes ru-break {
+        to {
+          opacity: 0;
+          transform: scale(1.35);
+          filter: blur(6px) grayscale(1);
+        }
+      }
+      @keyframes ru-vanish {
+        to {
+          opacity: 0;
+          transform: scale(1.3);
+        }
+      }
+      @keyframes ru-shock {
+        0% {
+          opacity: 0.9;
+          transform: scale(0.6);
+          border-width: 6px;
+        }
+        100% {
+          opacity: 0;
+          transform: scale(2.6);
+          border-width: 1px;
+        }
+      }
+      @keyframes ru-flash {
+        0% {
+          opacity: 1;
+          transform: scale(0.5);
+        }
+        100% {
+          opacity: 0;
+          transform: scale(1.4);
+        }
+      }
+      @keyframes ru-slam {
+        from {
+          opacity: 0;
+          transform: scale(2.4);
+        }
+        40% {
+          opacity: 1;
+        }
+      }
+      @keyframes ru-draw {
+        to {
+          stroke-dashoffset: 0;
+        }
+      }
+      @keyframes ru-burst {
+        0% {
+          opacity: 1;
+          transform: translate(0, 0) rotate(0);
+        }
+        70% {
+          opacity: 1;
+        }
+        100% {
+          opacity: 0;
+          transform: translate(var(--x), calc(var(--y) + 40px)) rotate(var(--r));
+        }
+      }
+      @keyframes ru-rays-in {
+        to {
+          opacity: 0.7;
+        }
+      }
+      @keyframes ru-spin {
+        to {
+          rotate: 360deg;
+        }
+      }
+      @keyframes ru-kick {
+        from {
+          opacity: 0;
+          letter-spacing: 0.9em;
+        }
+        to {
+          letter-spacing: 0.3em;
+        }
+      }
+      @keyframes ru-rise {
+        from {
+          opacity: 0;
+          transform: translateY(14px);
+        }
+      }
+      /* a plain PR: a card that springs up, the old time rolls away under the new one, the gain pops */
+      .prm {
+        position: fixed;
+        left: 50%;
+        bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+        z-index: 110;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        min-width: 280px;
+        max-width: calc(100vw - 32px);
+        padding: 14px 18px 14px 14px;
+        border-radius: var(--r);
+        border: 1px solid color-mix(in srgb, var(--c) 45%, var(--border));
+        background: var(--panel);
+        backdrop-filter: var(--glass-blur);
+        -webkit-backdrop-filter: var(--glass-blur);
+        box-shadow: var(--shadow-lg), 0 0 0 4px color-mix(in srgb, var(--c) 12%, transparent);
+        overflow: hidden;
+        cursor: pointer;
+        translate: -50% 0;
+        animation: prm-in 0.55s cubic-bezier(0.2, 1.5, 0.4, 1) both;
+      }
+      html.mobile .prm {
+        bottom: calc(86px + env(safe-area-inset-bottom, 0px));
+      }
+      .prm.out {
+        animation: prm-out 0.3s ease-in forwards;
+      }
+      .prm-medal {
+        position: relative;
+        flex: none;
+        width: 46px;
+        height: 46px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        background: color-mix(in srgb, var(--c) 16%, transparent);
+        animation: prm-pop 0.5s cubic-bezier(0.2, 1.8, 0.4, 1) 0.2s both;
+      }
+      .prm-medal svg {
+        width: 30px;
+        height: 30px;
+        fill: none;
+        stroke: var(--c);
+        stroke-width: 2;
+        stroke-linecap: round;
+      }
+      .prm-medal .dial {
+        stroke-dasharray: 1;
+        stroke-dashoffset: 1;
+        animation: ru-draw 0.6s ease-out 0.3s forwards;
+      }
+      .prm-medal .hand {
+        transform-origin: 12px 13px;
+        animation: prm-tick 0.9s cubic-bezier(0.3, 0, 0.2, 1) 0.3s both;
+      }
+      .prm-k {
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--c);
+      }
+      .prm-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 2px;
+      }
+      .prm-roll {
+        display: inline-block;
+        height: 26px;
+        overflow: hidden;
+        font-size: 20px;
+        line-height: 26px;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+      }
+      .prm-roll > span {
+        display: flex;
+        flex-direction: column;
+        animation: prm-roll 0.5s cubic-bezier(0.5, 0, 0.2, 1.3) 0.75s both;
+      }
+      .prm-roll s {
+        color: var(--faint);
+        font-weight: 600;
+      }
+      .prm-gain {
+        padding: 1px 8px;
+        border-radius: var(--r-pill);
+        background: color-mix(in srgb, var(--ok) 16%, transparent);
+        color: var(--ok);
+        font-size: 12px;
+        font-weight: 700;
+        animation: prm-pop 0.45s cubic-bezier(0.2, 1.8, 0.4, 1) 1.15s both;
+      }
+      .prm-more {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 2px;
+      }
+      .prm-shine {
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(105deg, transparent 35%, color-mix(in srgb, var(--c) 22%, transparent) 50%, transparent 65%);
+        translate: -100% 0;
+        animation: prm-shine 0.9s ease-in-out 1.2s forwards;
+        pointer-events: none;
+      }
+      .prm-bar {
+        position: absolute;
+        left: 0;
+        bottom: 0;
+        height: 3px;
+        width: 100%;
+        background: var(--c);
+        transform-origin: left;
+        animation: prm-life var(--life) linear forwards;
+      }
+      .prm:hover .prm-bar {
+        animation-play-state: paused;
+      }
+      @keyframes prm-in {
+        from {
+          opacity: 0;
+          transform: translateY(120%) scale(0.9);
+        }
+      }
+      @keyframes prm-out {
+        to {
+          opacity: 0;
+          transform: translateY(30%) scale(0.95);
+        }
+      }
+      @keyframes prm-pop {
+        from {
+          opacity: 0;
+          transform: scale(0.3);
+        }
+      }
+      @keyframes prm-tick {
+        from {
+          transform: rotate(-300deg);
+        }
+      }
+      @keyframes prm-roll {
+        to {
+          transform: translateY(-26px);
+        }
+      }
+      @keyframes prm-shine {
+        to {
+          translate: 100% 0;
+        }
+      }
+      @keyframes prm-life {
+        to {
+          transform: scaleX(0);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .rankup *,
+        .rankup,
+        .prm,
+        .prm * {
+          animation-duration: 0.01s !important;
+          animation-delay: 0s !important;
+          animation-iteration-count: 1 !important;
+        }
+        .prm-bar {
+          animation-duration: var(--life) !important;
+        }
+      }
+      .witem.sel {
+        background: var(--well);
+        box-shadow: inset 3px 0 0 var(--brand);
+      }
+      svg.route {
+        display: block;
+        width: 100%;
+        border-radius: var(--r);
+        background: var(--well);
+        border: 1px solid var(--border);
+      }
+      .calheat {
+        display: grid;
+        grid-template-columns: repeat(7, 1fr);
+        gap: 4px;
+        padding: 12px 14px;
+      }
+      .calheat > b {
+        font-size: 11px;
+        color: var(--muted);
+        text-align: center;
+        font-weight: 600;
+      }
+      .calheat button {
+        min-height: 54px;
+        border: 1px solid var(--border);
+        border-radius: var(--r);
+        background: color-mix(in srgb, var(--brand) calc(var(--k, 0) * 1%), var(--panel));
+        color: var(--text);
+        font: inherit;
+        font-size: 11px;
+        text-align: left;
+        padding: 4px 6px;
+        cursor: pointer;
+      }
+      .calheat button.off {
+        opacity: 0.45;
+        cursor: default;
+      }
+      .calheat button b {
+        display: block;
+        font-size: 13px;
+        margin-top: 2px;
+      }
+      /* the shelf: set a session aside by dropping it here, drag it back onto a day later */
+      .pd-shelf {
+        position: fixed;
+        left: 16px;
+        bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+        z-index: 96;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 14px 20px;
+        border: 2px dashed var(--border2);
+        border-radius: var(--r);
+        background: var(--panel);
+        color: var(--muted);
+        font-weight: 650;
+        box-shadow: var(--shadow-lg);
+        animation: pd-rise 0.18s ease-out;
+      }
+      .pd-shelf svg {
+        width: 20px;
+        height: 20px;
+      }
+      .pd-shelf.drop {
+        border-color: var(--brand);
+        color: var(--brand);
+        background: var(--well);
+      }
+      @keyframes pd-rise {
+        from {
+          opacity: 0;
+          transform: translateY(14px);
+        }
+      }
+      body.dragging-plan .pdhud {
+        bottom: calc(92px + env(safe-area-inset-bottom, 0px));
+      }
+      .pd-edge {
+        position: fixed;
+        z-index: 94;
+        top: 50%;
+        width: 44px;
+        height: 96px;
+        margin-top: -48px;
+        display: grid;
+        place-items: center;
+        border-radius: var(--r);
+        background: var(--panel);
+        border: 1px solid var(--border2);
+        color: var(--muted);
+        box-shadow: var(--shadow-lg);
+        opacity: 0.9;
+      }
+      .pd-edge svg {
+        width: 22px;
+        height: 22px;
+      }
+      .pd-edge.drop {
+        border-color: var(--brand);
+        color: var(--brand);
+      }
+      .sess.swap,
+      .msess.swap,
+      .pm-chip.swap {
+        outline: 2px solid var(--brand);
+        outline-offset: 1px;
+      }
+      .sess.picked,
+      .msess.picked,
+      .pm-chip.picked {
+        outline: 2px solid var(--brand);
+        background: var(--well);
+      }
+      .rz {
+        height: 9px;
+        margin: 4px -8px -7px;
+        cursor: ns-resize;
+        display: grid;
+        place-items: center;
+        touch-action: none;
+      }
+      .rz::after {
+        content: "";
+        width: 22px;
+        height: 3px;
+        border-radius: 3px;
+        background: var(--border2);
+      }
+      .sess:hover .rz::after {
+        background: var(--c);
+      }
+      .pd-selbar {
+        position: fixed;
+        left: 50%;
+        bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+        transform: translateX(-50%);
+        z-index: 92;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        max-width: min(640px, 94vw);
+        padding: 10px 14px;
+        background: var(--panel);
+        border: 1px solid var(--border2);
+        border-radius: var(--r);
+        box-shadow: var(--shadow-lg);
+        font-size: 13px;
+      }
+      .pd-selbar .why {
+        flex-basis: 100%;
+        text-align: center;
+      }
+      .shelfrow {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      .shelfrow .empty-hint {
+        border: 1px dashed var(--border2);
+        border-radius: var(--r-sm);
+        padding: 6px 12px;
+        color: var(--muted);
+        font-size: 12.5px;
+      }
+      .daysel {
+        outline: 2px solid var(--brand);
+        outline-offset: -2px;
+        border-radius: 6px;
       }
       .check {
         width: 16px;
@@ -2015,6 +2674,56 @@
         font-size: 11px;
         color: var(--brand);
         font-weight: 700;
+      }
+      .season .pin.drag {
+        z-index: 2;
+        cursor: grabbing;
+      }
+      .season .pin {
+        touch-action: none;
+        user-select: none;
+      }
+      .phband {
+        position: relative;
+        height: 22px;
+        margin: 4px 10px 0;
+        border-radius: var(--r);
+        overflow: hidden;
+        background: var(--well);
+      }
+      .phband i {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        display: flex;
+        align-items: center;
+        padding: 0 8px;
+        font-style: normal;
+        font-size: 11px;
+        color: var(--text2);
+        background: color-mix(in srgb, var(--brand) calc(var(--k) * 1%), transparent);
+        border-right: 2px solid var(--panel);
+        white-space: nowrap;
+        overflow: hidden;
+      }
+      .lever {
+        display: grid;
+        grid-template-columns: 120px 1fr 64px;
+        align-items: center;
+        gap: 10px;
+        margin: 8px 0;
+        font-size: 13px;
+      }
+      .lever output {
+        text-align: right;
+        font-weight: 600;
+      }
+      .chk-x {
+        float: right;
+        border: 0;
+        background: none;
+        color: var(--faint);
+        cursor: pointer;
       }
       .season .pin {
         position: absolute;
@@ -5211,6 +5920,8 @@
           <div class="stat-chips" id="statChips"></div>
           <div class="top-actions">
             <span class="chip-date" id="todayChip"></span
+            ><button class="icon-btn desktop-only" id="palBtn" title="Search and actions (Ctrl+K)" onclick="openPalette()"></button
+            ><button class="icon-btn" id="histBtn" title="Recent changes: undo any of them" onclick="openHistory()"></button
             ><button class="icon-btn" id="themeBtn" title="Toggle light / dark"></button>
             <button
               class="icon-btn mobile-only"
@@ -5266,6 +5977,7 @@
         search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
         x: '<path d="M18 6 6 18M6 6l12 12"/>',
         refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5"/>',
+        undo: '<path d="M3 7v6h6"/><path d="M3.5 13a9 9 0 1 0 2.6-6.4L3 10"/>',
         drop: '<path d="M12 2.7s-6 6.3-6 11.3a6 6 0 0 0 12 0c0-5-6-11.3-6-11.3z"/>',
         clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
         bolt: '<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>',
@@ -5320,7 +6032,20 @@
         T: "#a0a8b8",
       };
       const col = (s) => SC[s] || SC.Other;
-      const PRIO = { A: "#f03d3d", B: "#ff9f0a", C: "#7a8699" };
+      const PRIO = { A: "#f03d3d", B: "#ff9f0a", C: "#7a8699", G: "#5b5bff" };
+      // The campaign laid over the fitness chart: every race and goal in the plan's reach, the one being built toward
+      // drawn heavier, with the days left in the label; phases as a strip along the bottom.
+      const pmcMarks = (d) =>
+        d.pmc.markers.map((m) => ({
+          i: m.i,
+          name: `${m.name} · ${m.days}d`,
+          label: m.focus ? `${m.name} · ${m.days}d` : m.name,
+          color: PRIO[m.p],
+          bold: m.focus,
+          goal: m.kind === "goal",
+        }));
+      const PHASE_C = { Base: "--brand", Build: "--warn", Peak: "--bad", Taper: "--ok", "Race week": "--ok", Checkpoint: "--ok", Recovery: "--muted" };
+      const pmcBands = (d) => (d.pmc.phases || []).map((p) => ({ i0: p.i0, i1: p.i1, label: p.phase, color: `var(${PHASE_C[p.phase] || "--muted"})` }));
       const PHASE = {
         Base: "#00a3ff",
         Build: "#5b5bff",
@@ -5469,14 +6194,18 @@
         const step = (n < 1.5 ? 1 : n < 3 ? 2 : n < 7 ? 5 : 10) * mag;
         return [Math.floor(lo / step) * step, Math.ceil(hi / step) * step, step];
       }
-      function hoverTip(el, svg, m, pw, n, X, render) {
+      // Charts in one `group` share a cursor (hover one, the others follow); `onPick(i)` makes a click mean something;
+      // `onMove(i)` lets something outside the chart (the route map) follow the cursor.
+      const LINKED = {};
+      function hoverTip(el, svg, m, pw, n, X, render, o = {}) {
         const tip = $(".tip", el),
           hx = $(".hx", svg),
           dots = $(".dots", svg);
-        const show = (e) => {
-          const r = svg.getBoundingClientRect(),
-            x = e.clientX - r.left;
-          const i = Math.max(0, Math.min(n - 1, Math.round(((x - m.l) / pw) * (n - 1))));
+        const at = (e) => {
+          const r = svg.getBoundingClientRect();
+          return Math.max(0, Math.min(n - 1, Math.round(((e.clientX - r.left - m.l) / pw) * (n - 1))));
+        };
+        const draw = (i, withTip) => {
           const { html, pts } = render(i);
           hx.setAttribute("x1", X(i));
           hx.setAttribute("x2", X(i));
@@ -5486,25 +6215,53 @@
               (p) => `<circle cx="${X(i)}" cy="${p.y}" r="4" style="fill:${p.c};stroke:var(--panel);stroke-width:2"/>`,
             )
             .join("");
+          if (!withTip) return;
           tip.innerHTML = html;
           tip.style.opacity = 1;
           const tw = tip.offsetWidth,
-            left = X(i) + 14 + tw > r.width ? X(i) - tw - 14 : X(i) + 14;
+            left = X(i) + 14 + tw > svg.getBoundingClientRect().width ? X(i) - tw - 14 : X(i) + 14;
           tip.style.left = left + "px";
           tip.style.top = m.t + 6 + "px";
         };
+        const clear = () => {
+          tip.style.opacity = 0;
+          hx.style.visibility = "hidden";
+          dots.innerHTML = "";
+        };
+        if (o.group) {
+          const g = (LINKED[o.group] = (LINKED[o.group] || []).filter((x) => document.contains(x.el)));
+          g.push({ el, draw, clear, n });
+        }
+        const show = (e) => {
+          const i = at(e);
+          draw(i, true);
+          if (o.onMove) o.onMove(i);
+          if (o.group) LINKED[o.group].forEach((x) => x.el !== el && x.draw(Math.round((i / (n - 1 || 1)) * (x.n - 1)), false));
+        };
         const hit = $(".hit", svg);
         hit.style.touchAction = "pan-y";
+        if (o.onPick) hit.style.cursor = "pointer";
         hit.addEventListener("pointermove", show);
         hit.addEventListener("pointerdown", show);
+        if (o.onPick) hit.addEventListener("click", (e) => o.onPick(at(e)));
         hit.addEventListener("pointerleave", (e) => {
-          if (e.pointerType === "mouse") {
-            tip.style.opacity = 0;
-            hx.style.visibility = "hidden";
-            dots.innerHTML = "";
-          }
+          if (e.pointerType !== "mouse") return;
+          clear();
+          if (o.onMove) o.onMove(null);
+          if (o.group) LINKED[o.group].forEach((x) => x.el !== el && x.clear());
         });
       }
+      // series a legend click has switched off, by first word of the name ("Fitness (CTL)" and "Fitness" are one)
+      let HIDDEN = new Set();
+      const seriesOn = (series) => series.filter((se) => !HIDDEN.has(String(se.name).split(" ")[0]));
+      document.addEventListener("click", (e) => {
+        const t = e.target.closest("[data-leg]");
+        if (!t) return;
+        const k = t.dataset.leg;
+        HIDDEN.has(k) ? HIDDEN.delete(k) : HIDDEN.add(k);
+        $$("[data-leg]").forEach((x) => x.classList.toggle("off", HIDDEN.has(x.dataset.leg)));
+        CHARTS.forEach((f) => f());
+      });
       function lineChart(
         el,
         {
@@ -5516,10 +6273,15 @@
           zero = false,
           marker = null,
           marks = [],
+          bands = [],
           split = 1e9,
           tipfmt = (v) => v,
+          onPick = null,
+          group = null,
+          onMove = null,
         },
       ) {
+        series = seriesOn(series);
         const W = el.clientWidth || 600,
           H = height,
           m = { l: 40, r: 12, t: marks.length ? 22 : 10, b: 26 },
@@ -5547,17 +6309,26 @@
           s += `<text x="${X(i)}" y="${H - 7}" text-anchor="middle">${esc(xfmt(labels[i]))}</text>`;
         if (marker != null && marker < n)
           s += `<line class="today" x1="${X(marker)}" x2="${X(marker)}" y1="${m.t}" y2="${m.t + ph}"/><text x="${X(marker) + 5}" y="${m.t + 11}">Today</text>`;
-        let labelEnd = -1e9;
-        marks.forEach((k) => {
+        bands.forEach((bd) => {
+          const x0 = X(bd.i0),
+            x1 = X(bd.i1),
+            y = m.t + ph - 7;
+          s += `<rect x="${x0}" y="${y}" width="${Math.max(1, x1 - x0)}" height="7" rx="2" style="fill:${bd.color};opacity:.35"><title>${esc(bd.label)}</title></rect>`;
+          if (x1 - x0 > bd.label.length * 5 + 8)
+            s += `<text x="${(x0 + x1) / 2}" y="${y - 3}" text-anchor="middle" style="font-size:9px;fill:var(--muted)">${esc(bd.label)}</text>`;
+        });
+        const taken = [];
+        [...marks].sort((p, q) => (q.bold ? 1 : 0) - (p.bold ? 1 : 0)).forEach((k) => {
           const x = X(k.i),
-            name = k.name.length > 22 ? k.name.slice(0, 21) + "…" : k.name,
+            lab = k.label || k.name,
+            name = lab.length > 26 ? lab.slice(0, 25) + "…" : lab,
             w = name.length * 6.4;
           const end = x > W - w / 2 - 4,
             x0 = end ? x - w : x - w / 2;
-          s += `<line x1="${x}" x2="${x}" y1="${m.t}" y2="${m.t + ph}" style="stroke:${k.color};stroke-width:1.5;stroke-dasharray:3 3;opacity:.8"/>`;
-          if (x0 < labelEnd + 8) return; // would overlap the previous label: the line and the tooltip still name it
-          labelEnd = x0 + w;
-          s += `<text x="${x}" y="${m.t - 8}" text-anchor="${end ? "end" : "middle"}" style="fill:${k.color};font-weight:600">${esc(name)}</text>`;
+          s += `<line x1="${x}" x2="${x}" y1="${m.t}" y2="${m.t + ph}" style="stroke:${k.color};stroke-width:${k.bold ? 2.5 : 1.5};stroke-dasharray:${k.goal ? "1 4" : k.bold ? "none" : "3 3"};opacity:.85"/>`;
+          if (taken.some(([u, v]) => x0 < v + 8 && x0 + w > u - 8)) return; // overlaps a label already placed; the tooltip still names it
+          taken.push([x0, x0 + w]);
+          s += `<text x="${x}" y="${m.t - 8}" text-anchor="${end ? "end" : "middle"}" style="fill:${k.color};font-weight:${k.bold ? 800 : 600}">${k.goal ? "◆ " : ""}${esc(name)}</text>`;
         });
         series.forEach((se, k) => {
           let d = "",
@@ -5600,9 +6371,10 @@
             html: `<b>${esc(xfmt(labels[i]))}${i >= split ? " · plan" : ""}</b>${mk ? `<div style="color:${mk.color};font-weight:600">${esc(mk.name)}</div>` : ""}${rows.join("") || '<span class="muted">No data</span>'}`,
             pts,
           };
-        });
+        }, { onPick, group, onMove });
       }
-      function barChart(el, { labels, series, height = 240, yfmt = (v) => v, tipfmt = (v) => v }) {
+      function barChart(el, { labels, series, height = 240, yfmt = (v) => v, tipfmt = (v) => v, onPick = null }) {
+        series = seriesOn(series);
         const W = el.clientWidth || 600,
           H = height,
           m = { l: 40, r: 12, t: 10, b: 26 },
@@ -5647,7 +6419,7 @@
               .join("") +
             `<div style="border-top:1px solid var(--border);margin-top:4px;padding-top:4px"><span>Total</span><b>${esc(tipfmt(tot[i]))}</b></div>`,
           pts: [],
-        }));
+        }), { onPick });
       }
       function donut(parts, { size = 168, stroke = 20, center = "", sub = "" } = {}) {
         const r = (size - stroke) / 2,
@@ -5691,8 +6463,14 @@
         const mx = Math.max(...items.map((x) => x.v), 1);
         return `<div class="hbar">${items.map((x) => `<div class="lab">${esc(x.l)}</div><div class="val">${esc(x.t)}</div><div class="bar"><i style="width:${Math.max(2, (x.v / mx) * 100)}%;background:${x.c || "var(--brand)"}"></i></div>`).join("")}</div>`;
       };
-      const legend = (items) =>
-        `<div class="legend">${items.map(([n, c, dash]) => `<span><i class="${dash ? "dash" : ""}" style="--c:${c}"></i>${esc(n)}</span>`).join("")}</div>`;
+      // `tog` makes each entry a switch for the series of that name in the charts on the page
+      const legend = (items, tog) =>
+        `<div class="legend">${items
+          .map(([n, c, dash]) => {
+            const k = esc(n.split(" ")[0]);
+            return `<span${tog ? ` data-leg="${k}" class="${HIDDEN.has(n.split(" ")[0]) ? "off" : ""}" role="button" tabindex="0" title="Show or hide"` : ""}><i class="${dash ? "dash" : ""}" style="--c:${c}"></i>${esc(n)}</span>`;
+          })
+          .join("")}</div>`;
 
       // ------------------------------------------------------------------ shell
       const NAV = [
@@ -5816,6 +6594,8 @@
         applyTheme();
         $("#syncBtn").style.display = MOBILE && BOOT.paired ? "" : "none";
         $("#syncBtn").innerHTML = I("refresh");
+        $("#palBtn").innerHTML = I("search");
+        $("#histBtn").innerHTML = I("undo");
       }
       /// The phone's native side stamps UTC; the engine wants this device's wall-clock time.
       function localIso(s) {
@@ -5826,6 +6606,7 @@
       }
 
       async function go(page) {
+        if (page !== PAGE) HIDDEN.clear();
         PAGE = page;
         store.set("page", page);
         if (page !== "races") RACEVIEW = null;
@@ -5854,11 +6635,31 @@
           .join("");
         $$("#statChips .stat-chip").forEach((b) => (b.onclick = () => go(shown[+b.dataset.i].go)));
       }
+      // Cards marked data-flip slide from where they were to where they are after a re-render, new ones ease in.
+      // Done by hand rather than with view transitions: those freeze painting while the page awaits the engine.
+      let FLIPPAGE = null;
+      const flipSnap = () => new Map($$("[data-flip]").map((el) => [el.dataset.flip, el.getBoundingClientRect()]));
+      function flipPlay(snap) {
+        const ease = { duration: 260, easing: "cubic-bezier(.2,.8,.2,1)" };
+        $$("[data-flip]").forEach((el) => {
+          const was = snap.get(el.dataset.flip),
+            now = el.getBoundingClientRect();
+          if (!was) return el.animate([{ opacity: 0, transform: "scale(.94)" }, { opacity: 1, transform: "none" }], ease);
+          const dx = was.left - now.left,
+            dy = was.top - now.top;
+          if (Math.abs(dx) > 1 || Math.abs(dy) > 1)
+            el.animate([{ transform: `translate(${dx}px,${dy}px)` }, { transform: "none" }], ease);
+        });
+      }
       function render(keepScroll) {
         // serialised: overlapping renders (save + navigate) can't interleave their DOM writes
         QUEUE = QUEUE.catch(() => {}).then(async () => {
           const c = $("#content"),
-            top = c.scrollTop;
+            top = c.scrollTop,
+            snap =
+              keepScroll && FLIPPAGE === PAGE && !matchMedia("(prefers-reduced-motion: reduce)").matches
+                ? flipSnap()
+                : null;
           CHARTS = [];
           // a call that never answers must not freeze every later click behind it
           let t;
@@ -5869,6 +6670,8 @@
           clearTimeout(t);
           c.scrollTop = keepScroll ? top : 0;
           CHARTS.forEach((f) => f());
+          if (snap && snap.size) flipPlay(snap);
+          FLIPPAGE = PAGE;
           paintStatus();
         });
         return QUEUE;
@@ -5895,8 +6698,17 @@
           e.preventDefault();
           return LAST_UNDO();
         }
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k" && !$("#modalRoot").innerHTML) {
+          e.preventDefault();
+          return openPalette();
+        }
         const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
         if (typing || e.ctrlKey || e.metaKey || e.altKey || $("#modalRoot").innerHTML) return;
+        if (PAGE === "plan" && "[]tT".includes(e.key)) {
+          e.preventDefault();
+          WEEK = e.key === "[" ? Math.max(0, (WEEK || 0) - 1) : e.key === "]" ? (WEEK || 0) + 1 : null;
+          return render(true);
+        }
         if (e.key === "n" || e.key === "N") {
           e.preventDefault();
           openWorkout();
@@ -5908,6 +6720,117 @@
         const pages = NAV.flatMap((x) => x[1]).map((x) => x[0]);
         if (/^[1-9]$/.test(e.key)) go(pages[+e.key - 1]);
       });
+      // every undoable change, newest first. ponytail: undoing an old one can overwrite a newer edit to the same row.
+      async function openHistory() {
+        const r = await call("history"),
+          ago = (ts) => {
+            const m = Math.round((Date.now() - ts) / 60000);
+            return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
+          };
+        modal(
+          `<div class="modal-h"><div><h3>Recent changes</h3><div class="sub">Take back any of these, newest first.</div></div><button class="icon-btn" data-close>${I("x")}</button></div>
+    <div class="modal-b">${
+      r.items.length
+        ? r.items
+            .map(
+              (x) => `<div class="row" style="gap:10px;padding:9px 0;border-top:1px solid var(--border)"><div class="grow"><b>${esc(x.label)}</b><div class="small muted">${ago(x.ts)}</div></div><button class="btn sm" data-undo="${x.seq}">${I("undo")}Undo</button></div>`,
+            )
+            .join("")
+        : '<div class="small muted">Nothing to undo yet. Deletes, moves and skips show up here.</div>'
+    }</div>`,
+          { width: 460 },
+        );
+        $$("[data-undo]").forEach(
+          (b) =>
+            (b.onclick = async () => {
+              const u = await call("undo", +b.dataset.undo);
+              closeModal();
+              u.ok ? toast("Undone") : toast("Could not undo", u.error, "bad");
+              refreshAll();
+            }),
+        );
+      }
+      // Ctrl+K: jump to a page or start something without finding the button
+      function openPalette() {
+        const items = [
+          ...NAV.flatMap((x) => x[1]).map(([id, label, icon]) => ({ label, icon, run: () => go(id), tag: "Go to" })),
+          { label: "Log a workout", icon: "plus", run: () => openWorkout(), tag: "Do" },
+          { label: "Schedule a session", icon: "cal", run: () => editScheduled(), tag: "Do" },
+          { label: "Add a race", icon: "flag", run: () => editRace(), tag: "Do" },
+          { label: "Report an injury or illness", icon: "shield", run: () => openIssue(), tag: "Do" },
+          { label: "Morning check-in", icon: "heart", run: () => go("wellness"), tag: "Do" },
+          { label: "Recent changes (undo)", icon: "undo", run: openHistory, tag: "Do" },
+          { label: "Switch light / dark", icon: "moon", run: () => $("#themeBtn").click(), tag: "Do" },
+        ];
+        // a subsequence match: "trp" finds "Training plan"
+        const score = (label, q) => {
+          let i = 0,
+            run = 0,
+            s = 0;
+          const l = label.toLowerCase();
+          for (const ch of q) {
+            const at = l.indexOf(ch, i);
+            if (at < 0) return -1;
+            run = at === i ? run + 1 : 0;
+            s += 1 + run * 2 - (at === 0 ? 0 : 0.1 * at);
+            i = at + 1;
+          }
+          return s;
+        };
+        let sel = 0,
+          shown = items;
+        modal(
+          `<div class="modal-b" style="padding:12px"><div class="search" style="width:100%">${I("search")}<input class="input" id="palQ" placeholder="Go to a page or do something…" autocomplete="off" style="width:100%"></div>
+    <div class="sheet-list" id="palList" style="margin-top:8px;max-height:50vh;overflow:auto"></div></div>`,
+          { width: 480 },
+        );
+        const paint = () => {
+          $("#palList").innerHTML = shown.length
+            ? shown
+                .map(
+                  (x, i) =>
+                    `<a data-i="${i}" class="${i === sel ? "active" : ""}">${I(x.icon)}<span class="grow">${esc(x.label)}</span><span class="small muted">${x.tag}</span></a>`,
+                )
+                .join("")
+            : '<div class="small muted" style="padding:10px 4px">Nothing matches.</div>';
+          $$("#palList a").forEach((a) => {
+            a.onclick = () => pick(+a.dataset.i);
+            a.onmouseenter = () => {
+              sel = +a.dataset.i;
+              $$("#palList a").forEach((b) => b.classList.toggle("active", b === a));
+            };
+          });
+          const on = $("#palList a.active");
+          if (on) on.scrollIntoView({ block: "nearest" });
+        };
+        const pick = (i) => {
+          const x = shown[i];
+          if (!x) return;
+          closeModal();
+          x.run();
+        };
+        $("#palQ").oninput = (e) => {
+          const q = e.target.value.trim().toLowerCase().replace(/\s+/g, "");
+          shown = q
+            ? items
+                .map((x) => [score(x.label, q), x])
+                .filter(([s]) => s >= 0)
+                .sort((a, b) => b[0] - a[0])
+                .map(([, x]) => x)
+            : items;
+          sel = 0;
+          paint();
+        };
+        $("#palQ").onkeydown = (e) => {
+          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+            e.preventDefault();
+            sel = (sel + (e.key === "ArrowDown" ? 1 : -1) + shown.length) % (shown.length || 1);
+            paint();
+          } else if (e.key === "Enter") pick(sel);
+        };
+        $("#palQ").focus();
+        paint();
+      }
       const DARK = matchMedia("(prefers-color-scheme: dark)");
       const isDark = () => BOOT.theme === "dark" || (BOOT.theme !== "light" && DARK.matches);
       function applyTheme() {
@@ -5949,6 +6872,202 @@
     <span class="small muted" style="white-space:nowrap">Why${I("right")}</span></button>`;
       }
 
+      // dashboard: a chart point or bar opens what is behind it; the range chips widen both charts
+      let PLAN_FOCUS = null;
+      function planFocus(d) {
+        const i = PLAN_FOCUS && d.weeks.findIndex((w) => w.days.some((x) => x.date === PLAN_FOCUS));
+        PLAN_FOCUS = null;
+        if (i >= 0) WEEK = i;
+      }
+      const DASHW = () => store.get("dashw", 12);
+      function openLog(from, to, label) {
+        LOG.range = { from, to, label };
+        go("log");
+      }
+      const rangeChips = () =>
+        `<div class="seg" id="dashw">${[[12, "12 wk"], [26, "6 mo"], [52, "1 yr"]].map(([n, l]) => `<button data-w="${n}" class="${DASHW() === n ? "on" : ""}">${l}</button>`).join("")}</div>`;
+      const pmcPick = (d) => (i) => {
+        const day = d.pmc.labels[i];
+        if (i < d.pmc.split) openLog(day, day, shortDate(day));
+        else {
+          PLAN_FOCUS = day;
+          go("plan");
+        }
+      };
+      const weekPick = (d) => (i) => {
+        const a = d.weekly.starts[i];
+        openLog(a, addDays(a, 6), "week of " + shortDate(a));
+      };
+      const todayActs = (s) =>
+        s.ref && s.sport !== "Rest" && s.sport !== "Race"
+          ? `<button class="btn sm" data-tmw="${s.ref}">${I("right")}Tomorrow</button><button class="btn sm" data-aside="${s.ref}">${I("folder")}Set aside</button>`
+          : "";
+      function dashWire() {
+        $$("#dashw button").forEach(
+          (b) =>
+            (b.onclick = () => {
+              store.set("dashw", +b.dataset.w);
+              render(true);
+            }),
+        );
+        $$("[data-tmw]").forEach(
+          (b) => (b.onclick = () => planDo("move_session", [b.dataset.tmw, addDays(BOOT.today, 1)], "Moved to tomorrow")),
+        );
+        $$("[data-aside]").forEach(
+          (b) => (b.onclick = () => planDo("skip_session", [b.dataset.aside], "Set aside on the shelf")),
+        );
+      }
+      // coach actions: take the rewrite as today's plan (one undo), or keep what was written
+      const coachActs = (d) =>
+        `<div class="row wrap" style="gap:8px;margin-top:14px">${
+          d.kept
+            ? `<button class="btn" data-coach="keep0">${I("undo")}Show the rewrite again</button><span class="small muted">Today is showing the plan as written.</span>`
+            : `<button class="btn primary" data-coach="apply">${I("check")}Use this</button><button class="btn" data-coach="keep1">${I("x")}Keep the original</button>`
+        }</div>`;
+      function coachWire(d) {
+        $$("[data-coach]").forEach(
+          (b) =>
+            (b.onclick = () => {
+              const k = b.dataset.coach;
+              if (k === "apply") planDo("coach_apply", [], "Today rewritten");
+              else planDo("coach_keep", [k === "keep1"], k === "keep1" ? "Keeping the plan as written" : "Rewrite is back");
+            }),
+        );
+        $$("[data-load]").forEach((el) => (el.onclick = () => loadSheet(d.load)));
+        $$("[data-wid]").forEach((el) => (el.onclick = () => openWorkoutId(+el.dataset.wid)));
+      }
+      // A save that beat a personal best. A rank-up takes the screen for a few seconds (tap to skip to the end); a plain
+      // best gets a card that rises from the bottom, rolls the old time away under the new one and opens the workout.
+      function promoteBests(list) {
+        const nb = (list || []).filter((b) => !b.first);
+        if (!nb.length) return;
+        const up = nb.find((b) => b.promoted);
+        return up ? rankUp(up, nb.filter((b) => b !== up)) : prMoment(nb[0], nb.length - 1);
+      }
+      function rankUp(up, rest) {
+        document.querySelector(".rankup")?.remove();
+        const old = { tier: up.old_tier, div: up.old_div, colour: up.old_colour };
+        const parts = Array.from({ length: 28 }, (_, i) => {
+          const a = (i / 28) * Math.PI * 2 + Math.random() * 0.4,
+            r = 90 + Math.random() * 90;
+          return `<i class="ru-p" style="--x:${(Math.cos(a) * r).toFixed(0)}px;--y:${(Math.sin(a) * r).toFixed(0)}px;--r:${(Math.random() * 540 - 270).toFixed(0)}deg;--s:${(4 + Math.random() * 6).toFixed(1)}px;--d:${(Math.random() * 0.12).toFixed(2)}s"></i>`;
+        }).join("");
+        const el = document.createElement("div");
+        el.className = "rankup";
+        el.style.cssText = `--c:${up.colour};--c0:${up.old_colour || up.colour};--from:.35`;
+        el.setAttribute("role", "dialog");
+        el.setAttribute("aria-modal", "true");
+        el.setAttribute("aria-label", `Rank up: ${up.tier}${up.div ? " " + up.div : ""}`);
+        el.innerHTML = `<div class="ru-wash"></div>
+    <div class="ru-stage" aria-hidden="true"><div class="ru-rays"></div>
+      <svg class="ru-ring" viewBox="0 0 120 120"><circle class="t" cx="60" cy="60" r="54"/><circle class="f" cx="60" cy="60" r="54" pathLength="1"/></svg>
+      <div class="ru-old">${tierBadge(old, 96)}</div><div class="ru-flash"></div><div class="ru-shock"></div>
+      <div class="ru-new">${tierBadge(up, 132)}</div>${parts}</div>
+    <div class="ru-kicker">Rank up</div>
+    <h2 class="ru-tier">${esc(up.tier)}${up.div ? " " + up.div : ""}</h2>
+    <div class="ru-from">from ${esc(up.old_tier)}${up.old_div ? " " + up.old_div : ""}</div>
+    <div class="ru-stat">${esc(up.label)} <b>${esc(up.time)}</b><span class="ru-gain">−<span id="ruGain">0:00</span></span></div>
+    ${rest.length ? `<div class="ru-also">Also: ${rest.map((b) => `${esc(b.label)} ${esc(b.time)}`).join(" · ")}</div>` : ""}
+    <div class="ru-acts"><button class="btn" data-ru="close">Nice</button><button class="btn primary" data-ru="ranks">See ranks</button></div>`;
+        $$(".ru-new .tb > path", el).slice(0, 1).forEach((p) => p.setAttribute("pathLength", "1"));
+        document.body.append(el);
+        const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`,
+          gainS = up.gain_s || 0,
+          timers = [];
+        let raf = 0;
+        const count = (dur) => {
+          const t0 = performance.now();
+          const step = (t) => {
+            const k = Math.min(1, (t - t0) / dur);
+            $("#ruGain", el).textContent = fmt(gainS * (1 - Math.pow(1 - k, 3)));
+            if (k < 1) raf = requestAnimationFrame(step);
+          };
+          raf = requestAnimationFrame(step);
+        };
+        timers.push(setTimeout(() => navigator.userActivation?.hasBeenActive && navigator.vibrate && navigator.vibrate([25, 40, 70]), 1300));
+        timers.push(setTimeout(() => count(900), 2150));
+        const finish = () => {
+          if (el.classList.contains("skip")) return;
+          el.classList.add("skip");
+          timers.forEach(clearTimeout);
+          cancelAnimationFrame(raf);
+          $("#ruGain", el).textContent = up.gain || fmt(gainS);
+        };
+        timers.push(setTimeout(() => el.classList.add("done"), 2600));
+        const close = (then) => {
+          finish();
+          el.classList.add("out");
+          document.removeEventListener("keydown", key);
+          setTimeout(() => {
+            el.remove();
+            then && then();
+          }, 250);
+        };
+        const key = (ev) => {
+          if (ev.key === "Escape") close();
+          else if (ev.key === "Enter" || ev.key === " ") el.classList.contains("skip") || el.classList.contains("done") ? close() : finish();
+        };
+        document.addEventListener("keydown", key);
+        el.onclick = (ev) => {
+          const b = ev.target.closest("[data-ru]");
+          if (b) return close(b.dataset.ru === "ranks" ? () => go("ranks") : null);
+          if (!el.classList.contains("skip") && !el.classList.contains("done")) finish();
+        };
+        setTimeout(() => $("[data-ru=close]", el)?.focus({ preventScroll: true }), 50);
+        if (matchMedia("(prefers-reduced-motion: reduce)").matches) finish();
+      }
+      function prMoment(b, more) {
+        document.querySelector(".prm")?.remove();
+        const life = 6000,
+          el = document.createElement("div");
+        el.className = "prm";
+        el.style.cssText = `--c:${b.colour || "var(--brand)"};--life:${life}ms`;
+        el.setAttribute("role", "status");
+        el.innerHTML = `<div class="prm-medal" aria-hidden="true"><svg viewBox="0 0 24 24"><circle class="dial" cx="12" cy="13" r="8" pathLength="1"/><path d="M10 2h4M12 2v3M19 6l1.5-1.5"/><path class="hand" d="M12 13V8.5"/></svg></div>
+    <div><div class="prm-k">New PR · ${esc(b.label)}</div>
+      <div class="prm-row"><span class="prm-roll" aria-label="${esc(b.time)}, was ${esc(b.prev)}"><span><s>${esc(b.prev)}</s><b>${esc(b.time)}</b></span></span><span class="prm-gain">−${esc(b.gain)}</span></div>
+      ${more ? `<div class="prm-more">+${more} more best${more === 1 ? "" : "s"}</div>` : ""}</div>
+    <i class="prm-shine"></i><i class="prm-bar"></i>`;
+        document.body.append(el);
+        navigator.userActivation?.hasBeenActive && navigator.vibrate && setTimeout(() => navigator.vibrate(20), 750);
+        let left = life,
+          t0 = Date.now(),
+          t = 0;
+        const close = () => {
+          clearTimeout(t);
+          el.classList.add("out");
+          setTimeout(() => el.remove(), 300);
+        };
+        const arm = () => (t = setTimeout(close, left));
+        el.onmouseenter = () => {
+          clearTimeout(t);
+          left -= Date.now() - t0;
+        };
+        el.onmouseleave = () => {
+          t0 = Date.now();
+          arm();
+        };
+        el.onclick = () => {
+          close();
+          if (b.wid) openWorkoutId(b.wid);
+          else go("ranks");
+        };
+        arm();
+      }
+      // the 28 days behind the load numbers
+      function loadSheet(L) {
+        modal(
+          `<div class="modal-h"><div><h3>Last 28 days</h3><div class="sub">Training load per day. Hover a bar for its day.</div></div><button class="icon-btn" data-close>${I("x")}</button></div>
+    <div class="modal-b"><div id="loadBars"></div></div>`,
+          { width: 640 },
+        );
+        barChart($("#loadBars"), {
+          labels: L.days.map((x) => shortDate(x.date)),
+          series: [{ name: "TSS", color: "var(--brand)", data: L.days.map((x) => x.tss) }],
+          height: 220,
+          tipfmt: (v) => `${Math.round(v)} TSS`,
+        });
+      }
       PAGES.coach = async (c) => {
         const d = await call("coach");
         const a = d.advice,
@@ -5960,7 +7079,7 @@
           JSON.stringify(d.planned.map((x) => [x.sport, x.dur])) !==
           JSON.stringify(d.coached.map((x) => [x.sport, x.dur]));
         const tile = (l, v, s, warn) =>
-          `<div class="mile${warn ? " warn" : ""}"><div class="l">${esc(l)}</div><b>${v}</b><div class="s">${esc(s)}</div></div>`;
+          `<div class="mile${warn ? " warn" : ""}" data-load><div class="l">${esc(l)}</div><b>${v}</b><div class="s">${esc(s)}</div></div>`;
         c.innerHTML = `<div class="page">
   <div class="card"><div class="card-b">
     <div class="verdict" style="--c:${VC[a.level]}">
@@ -5995,7 +7114,7 @@
           .map(
             (
               x,
-            ) => `<div>${badge(x.sport)}<span class="grow small muted">${esc(shortDate(x.date))} · ${esc(x.dur)} · ${x.tss} TSS</span>
+            ) => `<div data-wid="${x.id}" style="cursor:pointer">${badge(x.sport)}<span class="grow small muted">${esc(shortDate(x.date))} · ${esc(x.dur)} · ${x.tss} TSS</span>
           <b>${x.left} h</b></div>`,
           )
           .join("")}</div>`
@@ -6022,7 +7141,7 @@
     </div>
     ${d.coached.map((s) => `<p class="small" style="color:var(--text2);line-height:1.55;margin:12px 0 0">${esc(s.desc)}</p>`).join("")}
     <div class="small muted" style="margin-top:10px">${I("info")} Nothing is deleted &mdash; the plan rebuilds
-      itself around what you actually do.</div></div></div>`
+      itself around what you actually do.</div>${coachActs(d)}</div></div>`
       : ""
   }
 
@@ -6085,6 +7204,8 @@
       <div class="small">${d.readiness_notes.map((n, i) => `<div style="${i ? "color:var(--muted);margin-top:4px" : "font-weight:600"}">${esc(n)}</div>`).join("")}
       <div class="muted" style="margin-top:8px">The verdict above works without this &mdash; a check-in just makes it sharper.</div></div></div></div></div>
   </div>`;
+        coachWire(d);
+        driftPreviews(d);
         $$("[data-drift]").forEach(
           (b) =>
             (b.onclick = async () => {
@@ -6542,11 +7663,29 @@
           inside a longer run &mdash; all three count.</div>
       </div>
       <div id="prSteps" hidden>${stepsTable(e)}</div>
+      <div id="prHist" class="mt"></div>
     </div>
     <div class="modal-f"><span class="grow"></span><button class="btn" data-close>Close</button>
-      <button class="btn primary" onclick="closeModal();go('log')">Open training log</button></div>`,
+      ${e.wid ? `<button class="btn primary" id="prWk">${I("bolt")}Open that workout</button>` : `<button class="btn primary" onclick="closeModal();go('log')">Open training log</button>`}</div>`,
           { width: 600 },
         );
+        if ($("#prWk")) $("#prWk").onclick = () => (closeModal(), openWorkoutId(e.wid));
+        call("pr_history", e.sport, e.key).then((hd) => {
+          const pts = hd.points;
+          if (!pts || pts.length < 2 || !$("#prHist")) return;
+          const t = (s) => (s >= 3600 ? `${Math.floor(s / 3600)}:${mmss(s % 3600)}` : mmss(s));
+          $("#prHist").innerHTML = `<div class="small muted" style="margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.06em">Your best over time</div><div id="prHistC"></div>`;
+          lineChart($("#prHistC"), {
+            labels: pts.map((p) => p.date),
+            series: [
+              { name: "Effort", color: "var(--muted)", data: pts.map((p) => p.secs), thin: true },
+              { name: "Best", color: col(e.sport), data: pts.map((p) => p.best), area: true },
+            ],
+            height: 150,
+            yfmt: (v) => t(v),
+            tipfmt: (v) => t(v),
+          });
+        });
         // one view at a time: on a phone the two stacked meant the ladder pushed everything around
         const tabs = $$("#prTabs [data-tab]");
         tabs.forEach(
@@ -6742,7 +7881,7 @@
   <div class="body">${inner}</div></details>`;
 
       MPAGES.dashboard = async (c) => {
-        const d = await call("dashboard");
+        const d = await call("dashboard", DASHW());
         const nr = d.next_race,
           open = d.today.filter((s) => s.sport !== "Rest");
         const wkPct = d.week_plan ? Math.min(100, (d.week_done / d.week_plan) * 100) : 0;
@@ -6779,7 +7918,7 @@
     <div class="acts">${
       lead.sport === "Race"
         ? `<button class="btn primary" onclick="openRace(${lead.race_id})">${I("flag")}Race plan</button>`
-        : `<button class="btn primary" onclick="go('live')">${I("bolt")}Start</button>
+        : `<button class="btn primary" onclick="go('live')">${I("bolt")}Start</button>${todayActs(lead)}
          <button class="btn" onclick="openBrief(${lead.sched ? `'${lead.sched}'` : "null"}, '${BOOT.today}', ${lead.k})">${I("sun")}Briefing</button>
          <button class="btn" onclick='openWorkout(${JSON.stringify(prefill(BOOT.today, lead.sport, lead.dur))})'>${I("check")}Log</button>`
     }</div></div>`
@@ -6873,6 +8012,7 @@
   }
 
   <div class="msec"><h3>Trends</h3>
+    <div style="margin-bottom:8px">${rangeChips()}</div>
     ${mfold(
       "Fitness, fatigue and form",
       `CTL ${d.ctl} · ATL ${d.atl} · TSB ${d.tsb > 0 ? "+" : ""}${d.tsb}`,
@@ -6883,7 +8023,7 @@
           : ""),
       "pmc",
     )}
-    ${mfold("Weekly volume", "Hours by discipline, last 12 weeks", '<div id="weekly"></div>', "weekly")}
+    ${mfold("Weekly volume", `Hours by discipline, last ${d.weekly.labels.length} weeks`, '<div id="weekly"></div>', "weekly")}
   </div>
 
   <div class="msec"><h3>Recent<a href="#" onclick="go('log');return false">View all</a></h3>
@@ -6906,7 +8046,9 @@
               zero: true,
               marker: s - 1,
               split: s,
-              marks: d.pmc.markers.map((m) => ({ i: m.i, name: m.name, color: PRIO[m.p] })),
+              marks: pmcMarks(d),
+              bands: pmcBands(d),
+              onPick: pmcPick(d),
               tipfmt: (v) => v.toFixed(0),
               series: [
                 { name: "Fitness", color: "#00a3ff", data: hist("ctl"), area: true },
@@ -6921,6 +8063,7 @@
             barChart($("#weekly"), {
               labels: d.weekly.labels,
               height: 200,
+              onPick: weekPick(d),
               yfmt: (v) => v + "h",
               tipfmt: (v) => v.toFixed(1) + " h",
               series: groups.map((k) => ({ name: k, color: col(k), data: d.weekly.series[k] })),
@@ -6938,12 +8081,16 @@
           });
           CHARTS.push(redraw);
         });
-        $$("#content .witem").forEach((tr, i) => (tr.onclick = () => openWorkout(d.recent[i])));
+        $$("#content .witem").forEach((tr, i) => (tr.onclick = () => workoutDetail(d.recent[i])));
+        dashWire();
       };
 
       // ---- plan: the week you are in comes first; the controls that rebuild it live at the bottom
       MPAGES.plan = async (c) => {
         const d = await call("plan");
+        SHELF = d.shelf || [];
+        planFocus(d);
+        const view = store.get("planview", "week");
         OUTLOOK.base = await call("what_if", {});
         OUTLOOK.cur = null;
         const MTPLS = (await call("templates")).items;
@@ -6970,15 +8117,19 @@
       <button class="icon-btn" id="nextW" ${WEEK < d.weeks.length - 1 ? "" : "disabled"} aria-label="Next week">${I("right")}</button></div>
     <div class="bar" style="height:8px;margin:12px 0 7px"><i style="width:${pct}%;background:${pct >= 90 ? "var(--ok)" : "var(--brand)"}"></i></div>
     <div class="row small muted" style="justify-content:space-between"><span>${w.done} of ${w.hours} h · ${doneN}/${allS.length} sessions</span><span>${w.mode !== "Normal" ? `<b>${esc(w.mode)}</b> · ` : ""}${w.budget_h ? `${w.budget_h} h budget · ` : ""}${w.tss} TSS</span></div>
-    <div class="row wrap" style="gap:8px;margin-top:10px"><button class="btn sm grow" id="weekB" style="justify-content:center">${I("cal")}Set week</button><button class="btn sm grow" id="copyW" style="justify-content:center">${I("list")}Copy week</button>
+    <div class="row wrap" style="gap:8px;margin-top:10px"><div class="seg" id="pview" style="width:100%"><button type="button" data-v="week" class="${view === "week" ? "on" : ""}">Week</button><button type="button" data-v="month" class="${view === "month" ? "on" : ""}">Month</button></div>
+      <button class="btn sm grow ${PD.selMode ? "primary" : ""}" id="selB" style="justify-content:center">${I("check")}${PD.selMode ? "Done selecting" : "Select"}</button><button class="btn sm grow" id="weekB" style="justify-content:center">${I("cal")}Set week</button><button class="btn sm grow" id="copyW" style="justify-content:center">${I("list")}Copy week</button>
       ${!w.current && cur ? `<button class="btn sm grow" id="toNow" style="justify-content:center">This week</button>` : ""}</div>
   </div></div>
 
   ${OUTLOOK.base && OUTLOOK.base.base ? `<div class="mcard"><div class="p small" id="olText"></div></div>` : ""}
   <div class="mcard"><div class="p"><div class="row" style="justify-content:space-between;margin-bottom:8px"><b>My sessions</b><button class="btn sm primary" id="addB">${I("plus")}Add…</button></div>
-    <div class="row wrap" style="gap:8px">${tplChips(MTPLS)}</div></div></div>
+    <div class="row wrap" style="gap:8px">${tplChips(MTPLS)}</div>${shelfRow()}</div></div>
 
-  <div class="msec"><h3>Days</h3><div class="small muted" style="margin:-4px 0 8px">Press and hold a session to drag it to another day. Tap a day's name to block it.</div><div class="mdays">${w.days
+  ${
+    view === "month"
+      ? `<div class="msec"><h3>Month</h3><div class="small muted" style="margin:-4px 0 8px">Press and hold a session to drag it to another day. Tap a date to block it.</div><div class="mcard"><div class="p">${monthHtml(d)}</div></div></div>`
+      : `<div class="msec"><h3>Days</h3><div class="small muted" style="margin:-4px 0 8px">Press and hold a session to drag it to another day, or onto the shelf. Swipe to change week. Tap a day's name to block it.</div><div class="mdays">${w.days
     .map(
       (day) => `<div class="mday-card ${day.today ? "today" : ""} ${day.lock ? "locked" : ""}" ${dropAttr(day)}>
     <div class="dh tap" data-lock="${day.date}"><b>${day.dow}</b><span>${day.day}</span>${day.lock ? `<span class="lockb">${esc(day.lock.label)}</span>` : ""}${day.today ? "<em>Today</em>" : ""}</div>
@@ -6998,7 +8149,8 @@
         : '<div class="small faint rest">Rest</div>'
     }</div>`,
     )
-    .join("")}</div></div>
+    .join("")}</div></div>`
+  }
 
   <div class="msec"><h3>The whole block</h3>
     ${mfold(
@@ -7074,12 +8226,17 @@
             refreshAll();
           }
         };
-        $$(".msess").forEach((el) => (el.onclick = () => sessionSheet(w, el.dataset.d, +el.dataset.k)));
+        $$(".msess").forEach(
+          (el) =>
+            (el.onclick = (e) =>
+              pickClick(e) && el.dataset.ref ? togglePick(el) : sessionSheet(w, el.dataset.d, +el.dataset.k)),
+        );
       }
 
       // ---- training log: the list is the page; stats and tools stay out of its way
       MPAGES.log = async (c) => {
         const d = await call("workouts");
+        LOG.pick = new Set();
         LOG.all = d.rows;
         LOG.gear = d.gear;
         const st = d.stats;
@@ -7093,10 +8250,12 @@
     <div class="msticky">
       <div class="search">${I("search")}<input class="input" id="q" placeholder="Search notes, dates…" value="${esc(LOG.q)}"></div>
       <div class="mchips" id="filt">${["All", ...d.sports].map((s) => `<button class="${LOG.filter === s ? "on" : ""}" data-f="${s}">${s !== "All" ? `<i class="dot" style="--c:${col(s)}"></i>` : ""}${s}</button>`).join("")}</div>
+      <div class="seg" id="logView" style="margin-top:8px"><button data-v="list">List</button><button data-v="cal">Calendar</button></div>
     </div>
-    <div class="mcard" style="margin-top:10px"><div id="logTable"></div>
+    <div class="mcard" style="margin-top:10px"><div id="logRange"></div><div id="logTable"></div>
       <div class="small muted" style="padding:10px 14px;border-top:1px solid var(--border)" id="logFoot"></div></div>
-    <button class="btn danger mwide" id="bulkDel" style="display:none"><span></span></button>
+    <button class="btn mwide" id="cmpB" style="display:none">${I("trend")}Compare these two</button><button class="btn danger mwide" id="bulkDel" style="display:none"><span></span></button>
+    <div class="small muted" style="margin:6px 2px 0">Press and hold a workout to select it.</div>
     <div class="msec"><h3>Data</h3><div class="row" style="gap:8px">
       <button class="btn" style="flex:1;justify-content:center" onclick="importFiles()">${I("up")}Import</button>
       <button class="btn" style="flex:1;justify-content:center" onclick="exportCsv()">${I("down")}Export</button></div>
@@ -7114,6 +8273,7 @@
               drawLog();
             }),
         );
+        logWire();
         drawLog();
       };
 
@@ -7171,7 +8331,7 @@
       }
 
       PAGES.dashboard = async (c) => {
-        const d = await call("dashboard");
+        const d = await call("dashboard", DASHW());
         const tsbPill = d.tsb > 5 ? "ok" : d.tsb > -10 ? "info" : d.tsb > -30 ? "warn" : "bad";
         const groups = Object.keys(d.weekly.series);
         const splitParts = groups.map((k) => ({ name: k, value: d.sport_split[k] || 0, color: col(k) }));
@@ -7214,7 +8374,7 @@
         ["Fatigue (ATL)", "#f0387c"],
         ["Form (TSB)", "#f5b400"],
         ["Plan projection", "var(--muted)", 1],
-      ])}</div>
+      ], true)}${rangeChips()}</div>
       <div class="card-b"><div id="pmc"></div>
       ${d.ctl_race != null ? `<div class="row small muted" style="margin-top:8px">${I("info")}<span>Following the plan puts you at <b style="color:var(--text)">CTL ${d.ctl_race}</b> and <b style="color:var(--text)">TSB ${d.tsb_race > 0 ? "+" : ""}${d.tsb_race}</b> on the morning of ${esc(d.target.name)} (${esc(d.form_race.toLowerCase())}).</span></div>` : ""}</div></div>
     <div class="card"><div class="card-h"><div><h3>Today</h3><div class="sub">${d.phase ? esc(d.phase) + " phase" : "No active plan week"}</div></div><div class="row"><button class="btn sm primary" onclick="go('live')">${I("bolt")}Start workout</button><button class="btn sm" onclick="editScheduled()">${I("plus")}Schedule</button><button class="btn sm" onclick="go('plan')">Open plan</button></div></div>
@@ -7225,7 +8385,7 @@
                 .map(
                   (s) => `<div class="today-item" style="--c:${col(s.sport)}">
           <div class="row">${badge(s.sport)}${s.sport !== "Rest" ? `<span class="small muted">${s.dur} · ${s.tss} TSS</span>` : ""}<span class="grow"></span>
-          ${s.sport !== "Race" && s.sport !== "Rest" ? `<button class="btn sm" onclick="openBrief(${s.sched ? `'${s.sched}'` : "null"}, '${BOOT.today}', ${s.k})">${I("sun")}Briefing</button>` : ""}${s.sport === "Race" ? `<button class="btn sm" onclick="openRace(${s.race_id})">${I("flag")}Race plan</button>` : s.sport === "Rest" ? "" : `<button class="btn sm" onclick='openWorkout(${JSON.stringify(prefill(BOOT.today, s.sport, s.dur))})'>${I("check")}Log it</button>`}</div>
+          ${s.sport !== "Race" && s.sport !== "Rest" ? `<button class="btn sm" onclick="openBrief(${s.sched ? `'${s.sched}'` : "null"}, '${BOOT.today}', ${s.k})">${I("sun")}Briefing</button>` : ""}${todayActs(s)}${s.sport === "Race" ? `<button class="btn sm" onclick="openRace(${s.race_id})">${I("flag")}Race plan</button>` : s.sport === "Rest" ? "" : `<button class="btn sm" onclick='openWorkout(${JSON.stringify(prefill(BOOT.today, s.sport, s.dur))})'>${I("check")}Log it</button>`}</div>
           ${s.wx ? `<div class="small muted wxline">${I("sun")}${esc(s.wx)}</div>` : ""}<p>${esc(s.desc)}</p>${fuelList(s.fuel)}</div>`,
                 )
                 .join("")
@@ -7258,8 +8418,8 @@
   </div>
 
   <div class="grid g-main mt">
-    <div class="card"><div class="card-h"><div><h3>Weekly volume</h3><div class="sub">Hours per week by discipline, last 12 weeks</div></div>
-      ${legend(groups.map((k) => [k, col(k)]))}</div><div class="card-b"><div id="weekly"></div></div></div>
+    <div class="card"><div class="card-h"><div><h3>Weekly volume</h3><div class="sub">Hours per week by discipline, last ${d.weekly.labels.length} weeks</div></div>
+      ${legend(groups.map((k) => [k, col(k)]), true)}</div><div class="card-b"><div id="weekly"></div></div></div>
     <div class="card"><div class="card-h"><div><h3>This week</h3><div class="sub">Plan compliance and discipline mix (28 days)</div></div></div>
       <div class="card-b">
         <div class="row small" style="justify-content:space-between"><span class="muted">Completed</span><b>${d.week_done} / ${d.week_plan} h</b></div>
@@ -7284,7 +8444,9 @@
             zero: true,
             marker: s - 1,
             split: s,
-            marks: d.pmc.markers.map((m) => ({ i: m.i, name: m.name, color: PRIO[m.p] })),
+            marks: pmcMarks(d),
+              bands: pmcBands(d),
+            onPick: pmcPick(d),
             tipfmt: (v) => v.toFixed(0),
             series: [
               { name: "Fitness", color: "#00a3ff", data: hist("ctl"), area: true },
@@ -7300,12 +8462,14 @@
           barChart($("#weekly"), {
             labels: d.weekly.labels,
             height: 250,
+            onPick: weekPick(d),
             yfmt: (v) => v + "h",
             tipfmt: (v) => v.toFixed(1) + " h",
             series: groups.map((k) => ({ name: k, color: col(k), data: d.weekly.series[k] })),
           }),
         );
-        $$("#content .tbl tbody tr, #content .witem").forEach((tr, i) => (tr.onclick = () => openWorkout(d.recent[i])));
+        $$("#content .tbl tbody tr, #content .witem").forEach((tr, i) => (tr.onclick = () => workoutDetail(d.recent[i])));
+        dashWire();
       };
       function fuelList(lines) {
         if (!lines || !lines.length) return "";
@@ -7493,7 +8657,7 @@
             .map(
               (
                 w,
-              ) => `<div class="witem" style="--c:${col(w.sport)}"><div class="wmain"><b>${esc(w.sport)}</b> <span class="muted small">${esc(w.nice)}</span>
+              ) => `<div class="witem" data-id="${w.id}" style="--c:${col(w.sport)}"><div class="wmain"><b>${esc(w.sport)}</b> <span class="muted small">${esc(w.nice)}</span>
     <div class="small muted">${[w.dur, w.dist, w.pace].filter(Boolean).map(esc).join(" · ")}</div>${w.cond ? `<div class="small muted wxline">${I("sun")}${esc(w.cond)}${w.adj ? ` · ≈${esc(w.adj)} in cool weather` : ""}</div>` : ""}${w.notes ? `<div class="wnote">${esc(w.notes)}</div>` : ""}</div>
     <div class="wtss"><b>${w.tss || "—"}</b><span>TSS</span></div></div>`,
             )
@@ -7516,9 +8680,28 @@
       }
 
       // ------------------------------------------------------------------ log
-      const LOG = { filter: "All", q: "", sort: "date", dir: -1, rows: [] };
+      const LOG = { filter: "All", q: "", sort: "date", dir: -1, rows: [], range: null, view: "list", cal: null, pick: new Set() };
+      const logWire = () => {
+        $$("#logView button").forEach(
+          (b) =>
+            (b.onclick = () => {
+              LOG.view = b.dataset.v;
+              drawLog();
+            }),
+        );
+        $("#bulkDel").onclick = async () => {
+          const ids = [...LOG.pick];
+          LOG.pick = new Set();
+          if (ids.length) deleted(await call("delete_workouts", ids), `${ids.length} workout${ids.length > 1 ? "s" : ""}`);
+        };
+        $("#cmpB").onclick = () => {
+          const [a, b] = LOG.all.filter((w) => LOG.pick.has(w.id)).sort((x, y) => (x.date > y.date ? 1 : -1));
+          compareSheet(a, b);
+        };
+      };
       PAGES.log = async (c) => {
         const d = await call("workouts");
+        LOG.pick = new Set();
         LOG.all = d.rows;
         LOG.gear = d.gear;
         const st = d.stats;
@@ -7533,12 +8716,13 @@
   <div class="card mt">
     <div class="card-h wrap" style="padding-bottom:14px;border-bottom:1px solid var(--border)">
       <div class="row wrap"><div class="search">${I("search")}<input class="input" id="q" placeholder="Search notes, dates…" value="${esc(LOG.q)}" style="width:210px"></div>
-        <div class="seg" id="filt">${["All", ...d.sports].map((s) => `<button class="${LOG.filter === s ? "on" : ""}" data-f="${s}">${s !== "All" ? `<i class="dot" style="--c:${col(s)}"></i>` : ""}${s}</button>`).join("")}</div></div>
-      <div class="row"><button class="btn danger" id="bulkDel" style="display:none">${I("trash")}<span></span></button>
+        <div class="seg" id="filt">${["All", ...d.sports].map((s) => `<button class="${LOG.filter === s ? "on" : ""}" data-f="${s}">${s !== "All" ? `<i class="dot" style="--c:${col(s)}"></i>` : ""}${s}</button>`).join("")}</div>
+        <div class="seg" id="logView"><button data-v="list">List</button><button data-v="cal">Calendar</button></div></div>
+      <div class="row"><button class="btn" id="cmpB" style="display:none">${I("trend")}Compare</button><button class="btn danger" id="bulkDel" style="display:none">${I("trash")}<span></span></button>
         <button class="btn" onclick="importFiles()" title="Strava activities.csv, FIT, TCX or GPX. Duplicates are skipped automatically.">${I("up")}Import</button><button class="btn" onclick="exportCsv()">${I("down")}Export CSV</button>
         <button class="btn primary desktop-only" onclick="openWorkout()">${I("plus")}New workout</button></div>
     </div>
-    <div id="logTable" style="max-height:calc(100vh - 330px);overflow:auto"></div>
+    <div id="logRange"></div><div id="logTable" style="max-height:calc(100vh - 330px);overflow:auto"></div>
     <div class="row small muted" style="padding:10px 18px;border-top:1px solid var(--border)" id="logFoot"></div>
   </div></div>`;
         $("#q").oninput = (e) => {
@@ -7553,11 +8737,7 @@
               drawLog();
             }),
         );
-        $("#bulkDel").onclick = async () => {
-          const ids = $$(".sel:checked").map((x) => +x.value);
-          if (ids.length)
-            deleted(await call("delete_workouts", ids), `${ids.length} workout${ids.length > 1 ? "s" : ""}`);
-        };
+        logWire();
         drawLog();
       };
       const sortVal = (w, k) =>
@@ -7581,6 +8761,7 @@
           .filter(
             (w) =>
               (LOG.filter === "All" || w.sport === LOG.filter) &&
+              (!LOG.range || (w.date >= LOG.range.from && w.date <= LOG.range.to)) &&
               (!q || (w.notes + " " + w.nice + " " + w.date + " " + w.sport).toLowerCase().includes(q)),
           )
           .sort((a, b) => {
@@ -7588,6 +8769,17 @@
               y = sortVal(b, LOG.sort);
             return (x > y ? 1 : x < y ? -1 : 0) * LOG.dir;
           });
+        $("#logRange").innerHTML = LOG.range
+          ? `<div class="row small" style="gap:8px;padding:8px 14px"><span class="pill">${I("cal")}${esc(LOG.range.label)}</span><button class="btn sm" onclick="LOG.range=null;drawLog()">${I("x")}Show all</button></div>`
+          : "";
+        $$("#logView button").forEach((x) => x.classList.toggle("on", x.dataset.v === LOG.view));
+        if (LOG.view === "cal") {
+          $("#logTable").innerHTML = logCal();
+          $("#logFoot").textContent = "";
+          wireLogCal();
+          $("#bulkDel").style.display = $("#cmpB").style.display = "none";
+          return;
+        }
         $("#logTable").innerHTML = LOG.all.length
           ? rows.length
             ? workoutTable(rows, true, LOG.sort, LOG.dir)
@@ -7596,21 +8788,94 @@
         const tot = rows.reduce((a, w) => a + sortVal(w, "dur"), 0);
         $("#logFoot").textContent =
           `Showing ${rows.length} of ${LOG.all.length} workouts · ${(tot / 3600).toFixed(1)} h · ${rows.reduce((a, w) => a + (+w.tss || 0), 0)} TSS`;
-        $$("#logTable tbody tr, #logTable .witem").forEach((tr, i) => (tr.onclick = () => openWorkout(rows[i])));
         const upd = () => {
-          const n = $$(".sel:checked").length;
+          const n = LOG.pick.size;
           $("#bulkDel").style.display = n ? "" : "none";
           $("#bulkDel span").textContent = `Delete ${n}`;
-          $$(".sel").forEach((x) => x.closest("tr").classList.toggle("sel", x.checked));
+          $("#cmpB").style.display = n === 2 ? "" : "none";
+          $$("#logTable [data-id]").forEach((x) => x.classList.toggle("sel", LOG.pick.has(+x.dataset.id)));
         };
-        $$(".sel").forEach((x) => (x.onchange = upd));
+        const flip = (id) => (LOG.pick.has(id) ? LOG.pick.delete(id) : LOG.pick.add(id));
+        $$("#logTable tbody tr, #logTable .witem").forEach((tr, i) => {
+          let t = null,
+            held = false;
+          if (MOBILE) {
+            tr.addEventListener("pointerdown", () => {
+              held = false;
+              t = setTimeout(() => {
+                held = true;
+                LOG.pick.add(rows[i].id);
+                upd();
+              }, 500);
+            });
+            ["pointerup", "pointerleave", "pointercancel", "pointermove"].forEach((ev) =>
+              tr.addEventListener(ev, () => clearTimeout(t)),
+            );
+          }
+          tr.onclick = () => {
+            if (held) return (held = false);
+            if (MOBILE && LOG.pick.size) {
+              flip(rows[i].id);
+              upd();
+            } else workoutDetail(rows[i]);
+          };
+        });
+        $$("input.sel").forEach(
+          (x) =>
+            (x.onchange = () => {
+              x.checked ? LOG.pick.add(+x.value) : LOG.pick.delete(+x.value);
+              upd();
+            }),
+        );
         const all = $("#selAll");
         if (all)
           all.onchange = () => {
-            $$(".sel").forEach((x) => (x.checked = all.checked));
-            upd();
+            $$("input.sel").forEach((x) => {
+              x.checked = all.checked;
+              x.onchange();
+            });
           };
+        $$("input.sel").forEach((x) => (x.checked = LOG.pick.has(+x.value)));
         upd();
+      }
+      // a month of days shaded by training load; a day opens its sessions
+      function logCal() {
+        const m = LOG.cal || (LOG.cal = BOOT.today.slice(0, 7)),
+          first = new Date(m + "-01T00:00"),
+          pad = (first.getDay() + 6) % 7,
+          days = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+        const by = {};
+        LOG.all.forEach((w) => {
+          if (LOG.filter === "All" || w.sport === LOG.filter) by[w.date] = (by[w.date] || 0) + (+w.tss || 0);
+        });
+        const top = Math.max(60, ...Object.values(by));
+        const cells = [...Array(pad).fill(""), ...Array.from({ length: days }, (_, i) => i + 1)].map((d) => {
+          if (!d) return "<span></span>";
+          const iso = `${m}-${String(d).padStart(2, "0")}`,
+            v = by[iso] || 0;
+          return `<button data-day="${iso}" class="${v ? "" : "off"}" style="--k:${Math.round((v / top) * 70)}">${d}<b>${v ? Math.round(v) : ""}</b></button>`;
+        });
+        return `<div class="row" style="padding:10px 14px 0;gap:8px"><button class="btn sm" id="calPrev">${I("left")}</button><b class="grow" style="text-align:center">${first.toLocaleDateString("en-US", { month: "long", year: "numeric" })}</b><button class="btn sm" id="calNext">${I("right")}</button></div>
+      <div class="calheat">${["M", "T", "W", "T", "F", "S", "S"].map((x) => `<b>${x}</b>`).join("")}${cells.join("")}</div>
+      <div class="small muted" style="padding:0 14px 12px">Shaded by training load. Tap a day to see its sessions.</div>`;
+      }
+      function wireLogCal() {
+        const step = (n) => {
+          const [y, mo] = LOG.cal.split("-").map(Number),
+            d = new Date(y, mo - 1 + n, 1);
+          LOG.cal = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+          drawLog();
+        };
+        $("#calPrev").onclick = () => step(-1);
+        $("#calNext").onclick = () => step(1);
+        $$("[data-day]:not(.off)").forEach(
+          (b) =>
+            (b.onclick = () => {
+              LOG.range = { from: b.dataset.day, to: b.dataset.day, label: shortDate(b.dataset.day) };
+              LOG.view = "list";
+              drawLog();
+            }),
+        );
       }
       async function importFiles() {
         const r = await call("import_files");
@@ -7721,6 +8986,7 @@
           store.set("indoor:" + f.sport.value, f.indoor.checked);
           closeModal();
           toast(id ? "Workout updated" : "Workout logged", `${f.sport.value} · ${f.date.value}`);
+          promoteBests(r.new_bests);
           refreshAll();
         };
         $("#wSave").onclick = save;
@@ -7737,6 +9003,151 @@
           };
         if ($("#wProfile")) $("#wProfile").onclick = () => workoutProfile(id, w);
         setTimeout(() => (e.h || e.m ? f.dist : f.m).focus(), 30);
+      }
+
+      // ------------------------------------------------------------------ workout detail
+      // a workout in one place: the numbers, the route, pace and elevation under one cursor, splits, then Edit
+      async function openWorkoutId(id) {
+        const d = await call("workouts");
+        const w = d.rows.find((x) => x.id === id);
+        LOG.gear = d.gear;
+        if (w) workoutDetail(w);
+      }
+      const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
+      // the route drawn from GPS fixes, Web Mercator so it lines up with map tiles when those are switched on.
+      // Returns a function that moves a dot to the i-th point (the charts call it as the cursor moves).
+      function routeTrace(el, route, color) {
+        const W = el.clientWidth || 360,
+          H = 220,
+          pad = 16,
+          PI = Math.PI;
+        const xs = route.map((p) => (p[1] * PI) / 180),
+          ys = route.map((p) => Math.log(Math.tan(PI / 4 + (p[0] * PI) / 360)));
+        const x0 = Math.min(...xs),
+          x1 = Math.max(...xs),
+          y0 = Math.min(...ys),
+          y1 = Math.max(...ys);
+        const k = Math.min((W - 2 * pad) / (x1 - x0 || 1e-6), (H - 2 * pad) / (y1 - y0 || 1e-6)),
+          ox = (W - (x1 - x0) * k) / 2,
+          oy = (H - (y1 - y0) * k) / 2;
+        const X = (x) => ox + (x - x0) * k,
+          Y = (y) => oy + (y1 - y) * k;
+        let tiles = "";
+        if (BOOT.map_tiles) {
+          const z = Math.max(2, Math.min(17, Math.floor(Math.log2((4 * PI) / Math.max(x1 - x0, y1 - y0, 1e-4))))),
+            n = 2 ** z,
+            sz = (2 * PI) / n,
+            tx = (x) => Math.floor(((x + PI) / (2 * PI)) * n),
+            ty = (y) => Math.floor(((PI - y) / (2 * PI)) * n);
+          for (let i = tx(x0); i <= tx(x1); i++)
+            for (let j = ty(y1); j <= ty(y0); j++)
+              tiles += `<image href="https://tile.openstreetmap.org/${z}/${i}/${j}.png" x="${X(-PI + i * sz)}" y="${Y(PI - j * sz)}" width="${sz * k + 0.5}" height="${sz * k + 0.5}"/>`;
+          tiles += `<text x="${W - 6}" y="${H - 6}" text-anchor="end" style="font-size:10px;fill:var(--text)">© OpenStreetMap contributors</text>`;
+        }
+        const pts = route.map((_, i) => `${X(xs[i]).toFixed(1)},${Y(ys[i]).toFixed(1)}`),
+          last = pts.length - 1;
+        el.innerHTML = `<svg class="route" viewBox="0 0 ${W} ${H}" height="${H}" style="overflow:hidden">${tiles}<polyline points="${pts.join(" ")}" fill="none" style="stroke:${color};stroke-width:3.5;stroke-linejoin:round;stroke-linecap:round"/>
+          <circle cx="${pts[0].split(",")[0]}" cy="${pts[0].split(",")[1]}" r="5" style="fill:var(--ok);stroke:var(--panel);stroke-width:2"/>
+          <circle cx="${pts[last].split(",")[0]}" cy="${pts[last].split(",")[1]}" r="5" style="fill:var(--bad);stroke:var(--panel);stroke-width:2"/>
+          <circle id="rtDot" r="6" style="fill:var(--brand);stroke:var(--panel);stroke-width:2;visibility:hidden"/></svg>`;
+        const dot = $("#rtDot", el);
+        return (i) => {
+          if (i == null) return (dot.style.visibility = "hidden");
+          const [cx, cy] = pts[Math.min(last, Math.round((i / Math.max(1, last)) * last))].split(",");
+          dot.setAttribute("cx", cx);
+          dot.setAttribute("cy", cy);
+          dot.style.visibility = "visible";
+        };
+      }
+      async function workoutDetail(w) {
+        const stat = (l, v) => (v ? `<div class="mile"><div class="l">${l}</div><b>${esc(String(v))}</b></div>` : ""),
+          gear = (LOG.gear || []).find((g) => g.id === w.edit.gear_id);
+        modal(
+          `<div class="modal-h"><div class="row">${badge(w.sport)}<div><h3>${esc(w.nice)}</h3><div class="small muted">${esc(w.cond || "")}</div></div></div><button class="icon-btn" data-close>${I("x")}</button></div>
+    <div class="modal-b"><div class="milegrid">${stat("Duration", w.dur)}${stat("Distance", w.dist)}${stat("Pace / speed", w.pace)}${stat("Avg HR", w.hr && w.hr + " bpm")}${stat("Power", w.w && w.w + " W")}${stat("Training load", w.tss && w.tss + " TSS")}${stat("Energy", w.kcal && w.kcal + " kcal")}${stat("Effort", w.rpe && w.rpe + " / 10")}${stat("Gear", gear && gear.name)}</div>
+      ${(LOG.gear || []).some((g) => g.sports.includes(w.sport)) ? `<label class="field" style="margin-top:12px;max-width:260px"><span>Gear</span><select id="wdGear"><option value="">None</option>${(LOG.gear || []).filter((g) => g.sports.includes(w.sport)).map((g) => `<option value="${g.id}" ${g.id === w.edit.gear_id ? "selected" : ""}>${esc(g.name)}</option>`).join("")}</select></label>` : ""}
+      ${w.notes ? `<p class="small" style="margin:12px 0 0;color:var(--text2);line-height:1.55">${esc(w.notes)}</p>` : ""}
+      <div id="wdRoute" style="margin-top:14px"></div>
+      <div id="wdPace" style="margin-top:14px"></div><div id="wdElev"></div><div id="wdDec"></div>
+      ${
+        w.splits && w.splits.length
+          ? `<div class="small muted" style="margin:16px 0 6px;font-weight:600;text-transform:uppercase;letter-spacing:.06em">Splits</div>
+      <div class="reclist">${w.splits.map((sp, i) => `<div><span class="small muted" style="width:28px">${i + 1}</span><span class="grow">${mmss(sp.dur_s)}</span><b>${esc(sp.pace)}</b></div>`).join("")}</div>`
+          : ""
+      }</div>
+    <div class="modal-f"><button class="btn danger" id="wdDel">${I("trash")}Delete</button><span class="grow"></span><button class="btn" id="wdEdit">${I("edit")}Edit</button><button class="btn primary" data-close>Close</button></div>`,
+          { width: 720 },
+        );
+        $("#wdEdit").onclick = () => openWorkout(w);
+        $("#wdDel").onclick = async () => {
+          closeModal();
+          deleted(await call("delete_workouts", [w.id]), `${w.sport.toLowerCase()} on ${w.nice}`);
+        };
+        if ($("#wdGear"))
+          $("#wdGear").onchange = async (ev) => {
+            const r = await call("set_workout_gear", w.id, ev.target.value);
+            if (!r.ok) return toast("Could not change gear", r.error, "bad");
+            w.edit.gear_id = ev.target.value ? +ev.target.value : "";
+            toast("Gear changed", "Mileage moves with it.", "ok", { label: "Undo", run: () => call("undo", r.undo).then(() => refreshAll()) });
+            refreshAll();
+          };
+        if (!w.has_track) return;
+        const d = await call("workout_profile", w.id);
+        if (!d || !$("#wdPace")) return;
+        const dot = d.route ? routeTrace($("#wdRoute"), d.route, col(w.sport)) : () => {};
+        lineChart($("#wdPace"), {
+          labels: d.labels,
+          series: [{ name: d.pace_label, color: col(w.sport), data: d.pace, area: true }],
+          height: 170,
+          group: "wd",
+          onMove: dot,
+          xfmt: (v) => `${v} ${d.dist_unit}`,
+          yfmt: (v) => (w.sport === "Bike" ? v.toFixed(0) : fmtPace(v)),
+          tipfmt: (v) => (w.sport === "Bike" ? `${v.toFixed(1)} ${d.pace_unit}` : `${fmtPace(v)}${d.pace_unit}`),
+        });
+        if (d.elev)
+          lineChart($("#wdElev"), {
+            labels: d.labels,
+            series: [{ name: "Elevation", color: "var(--muted)", data: d.elev, area: true }],
+            height: 120,
+            zero: true,
+            group: "wd",
+            onMove: dot,
+            xfmt: (v) => `${v} ${d.dist_unit}`,
+            yfmt: (v) => v.toFixed(0),
+            tipfmt: (v) => `${v.toFixed(0)} ${d.elev_unit}`,
+          });
+        $("#wdDec").innerHTML = decoupleBlock(d.decoupling);
+      }
+      // two workouts side by side; their pace laid over each other when both have a track
+      async function compareSheet(a, b) {
+        const row = (l, f) => `<tr><td class="muted">${l}</td><td>${esc(String(f(a) || "—"))}</td><td>${esc(String(f(b) || "—"))}</td></tr>`;
+        modal(
+          `<div class="modal-h"><div><h3>Compare</h3><div class="small muted">${esc(a.nice)} against ${esc(b.nice)}</div></div><button class="icon-btn" data-close>${I("x")}</button></div>
+    <div class="modal-b"><table class="tbl"><thead><tr><th></th><th>${badge(a.sport)} ${esc(a.nice)}</th><th>${badge(b.sport)} ${esc(b.nice)}</th></tr></thead><tbody>
+      ${row("Duration", (w) => w.dur)}${row("Distance", (w) => w.dist)}${row("Pace / speed", (w) => w.pace)}${row("Avg HR", (w) => w.hr)}${row("Power", (w) => w.w)}${row("TSS", (w) => w.tss)}${row("RPE", (w) => w.rpe)}</tbody></table>
+      <div id="cmpChart" style="margin-top:14px"></div></div>
+    <div class="modal-f"><span class="grow"></span><button class="btn primary" data-close>Close</button></div>`,
+          { width: 720 },
+        );
+        const [pa, pb] = await Promise.all([a, b].map((w) => (w.has_track ? call("workout_profile", w.id) : null)));
+        if (!pa || !pb || a.sport !== b.sport || !$("#cmpChart")) return;
+        const N = 80,
+          at = (p, i) => {
+            const j = Math.round((i / (N - 1)) * (p.pace.length - 1));
+            return p.pace[j] ?? p.pace[j + 1] ?? null;
+          };
+        lineChart($("#cmpChart"), {
+          labels: Array.from({ length: N }, (_, i) => `${Math.round((i / (N - 1)) * 100)}%`),
+          series: [
+            { name: "Earlier", color: "var(--muted)", data: Array.from({ length: N }, (_, i) => at(pa, i)) },
+            { name: "Later", color: col(a.sport), data: Array.from({ length: N }, (_, i) => at(pb, i)) },
+          ],
+          height: 190,
+          xfmt: (v) => v,
+          yfmt: (v) => (a.sport === "Bike" ? v.toFixed(0) : fmtPace(v)),
+          tipfmt: (v) => (a.sport === "Bike" ? v.toFixed(1) : fmtPace(v)),
+        });
       }
 
       // ------------------------------------------------------------------ GPS profile (pace + elevation vs distance)
@@ -8095,6 +9506,7 @@
             if (!res.ok) return toast("Could not save", res.error, "bad");
             IV.state = "setup";
             toast("Workout saved", `${cfg.sport} · ${what}`);
+            promoteBests(res.new_bests);
             refreshAll();
             go("log");
           };
@@ -8354,6 +9766,7 @@
               "Workout saved",
               `${LIVE.sport} · ${fmtClock(r.dur_s)} · ${(r.dist_km * (LIVE.unit === "mi" ? 0.621371 : 1)).toFixed(2)} ${LIVE.unit}`,
             );
+            promoteBests(res.new_bests);
             refreshAll();
             go("log");
           };
@@ -8425,14 +9838,16 @@
       };
       const sgn = (v, f = (n) => n) => (v > 0 ? "+" : v < 0 ? "−" : "±") + f(Math.abs(v));
       const OUTLOOK = { base: null, cur: null };
-      const PD = { st: null, hud: null, timer: 0, seq: 0, last: 0, ready: false };
+      const PD = { st: null, hud: null, timer: 0, seq: 0, last: 0, ready: false, sel: new Set(), selMode: false, rz: null, rng: null };
       let PLANRANGE = { min: "", max: "" },
         PMONTH = null;
       const weekOf = (d, date) => d.weeks.find((w) => w.days.some((x) => x.date === date));
       const dayOf = (d, date) => d.weeks.flatMap((w) => w.days).find((x) => x.date === date);
       // only upcoming, unfinished sessions the plan can name move; only upcoming days without a race take them
       const dragAttr = (s, day) =>
-        s.ref && !s.done && !day.past && s.sport !== "Race" && s.sport !== "Rest" ? `data-ref="${esc(s.ref)}"` : "";
+        s.ref && !s.done && !day.past && s.sport !== "Race" && s.sport !== "Rest"
+          ? `data-ref="${esc(s.ref)}" data-flip="${esc(s.key || s.ref)}"`
+          : "";
       const dropAttr = (day) =>
         !day.past && !day.sessions.some((s) => s.sport === "Race")
           ? `data-date="${day.date}" data-drop data-label="${day.dow} ${day.day}"`
@@ -8488,7 +9903,7 @@
         return `<b>${esc(zone.dataset.label)}</b>${bits.length ? " · " + bits.join(" · ") : " · no race to project to"}${wi.quiet ? `<div class="small">No real change to race day: this is about how the week feels.</div>` : ""}
           ${wk ? `<div class="mini" title="${esc(wk.label)}: load by day">${wk.new.map((v, i) => `<i style="height:${Math.max(2, Math.round((v / top) * 28))}px;opacity:${wk.base[i] === v ? 0.45 : 1}"></i>`).join("")}</div>${hardTxt}` : ""}${wi.warnings.map((w) => `<div class="w">${esc(w)}</div>`).join("")}`;
       }
-      function planPreview(ref, zone, tpl) {
+      function planPreview(ref, zone, tpl, swap) {
         clearTimeout(PD.timer);
         const q = ++PD.seq;
         if (!zone) {
@@ -8499,10 +9914,13 @@
         PD.timer = setTimeout(async () => {
           try {
             const t = tpl && TPLS[tpl],
-              edit = t
-                ? { ref: "", date: zone.dataset.date, sport: t.sport, dur_s: t.dur_s, tss: t.tss, desc: t.desc }
-                : { ref, date: zone.dataset.date };
-            const wi = await call("what_if", { edits: [edit] });
+              date = zone.dataset.date,
+              edits = t
+                ? [{ ref: "", date, sport: t.sport, dur_s: t.dur_s, tss: t.tss, desc: t.desc }]
+                : swap
+                  ? [{ ref, date }, { ref: swap.ref, date: swap.date }]
+                  : [{ ref, date }];
+            const wi = await call("what_if", { edits });
             if (q !== PD.seq) return;
             OUTLOOK.cur = wi;
             outlookPaint();
@@ -8537,11 +9955,29 @@
             run: () => planDo("apply_change", [f.change], "Spacing fixed"),
           });
       }
+      const SESS_SEL = ".sess[data-ref], .msess[data-ref], .pm-chip[data-ref]";
+      let PLAND = null,
+        WEEKS_N = 1;
+      const addDays = (iso, n) => {
+        const t = new Date(iso + "T00:00");
+        t.setDate(t.getDate() + n);
+        return t.toLocaleDateString("en-CA");
+      };
+      const canLand = (iso) => {
+        const day = PLAND && PLAND.weeks.flatMap((w) => w.days).find((x) => x.date === iso);
+        return !!day && !day.past && !day.sessions.some((s) => s.sport === "Race");
+      };
+      const fmtMins = (m) => (m >= 60 ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}:00` : `${m}:00`);
+      function locate(ref) {
+        for (const w of PLAND.weeks)
+          for (const day of w.days) for (const s of day.sessions) if (s.ref === ref) return { day, s };
+        return null;
+      }
       function planDragInit() {
         if (PD.ready) return;
         PD.ready = true;
-        const SEL = ".sess[data-ref], .msess[data-ref], .pm-chip[data-ref], .tpl[data-tpl]",
-          ZONE = "[data-drop]";
+        const SEL = SESS_SEL + ", .tpl[data-tpl], .shelf-chip[data-ref]",
+          ZONE = "[data-drop], [data-shelf-drop]";
         const scroller = (el) => {
           for (let p = el.parentElement; p; p = p.parentElement)
             if (/(auto|scroll)/.test(getComputedStyle(p).overflowY) && p.scrollHeight > p.clientHeight) return p;
@@ -8552,15 +9988,63 @@
           st.ghost.style.left = st.x - st.dx + "px";
           st.ghost.style.top = st.y - st.dy + "px";
         };
+        // hold a drag at the edge of the week and it turns the page; the dragged session goes with you
+        const edgesPaint = () => {
+          $$(".pd-edge").forEach((x) => x.remove());
+          const host = $(".cal") || $(".mdays");
+          if (!host || !PD.st || !PD.st.on) return;
+          const r = host.getBoundingClientRect();
+          [
+            [-1, "left", r.left + 6, WEEK > 0],
+            [1, "right", innerWidth - r.right + 6, WEEK < WEEKS_N - 1],
+          ]
+            .filter((x) => x[3])
+            .forEach(([dir, side, off]) => {
+              const e = document.createElement("div");
+              e.className = "pd-edge";
+              e.dataset.edge = dir;
+              e.style[side] = Math.max(4, off) + "px";
+              e.innerHTML = I(dir < 0 ? "left" : "right");
+              document.body.append(e);
+            });
+        };
+        const flip = async (dir) => {
+          const st = PD.st;
+          if (!st || !st.on) return;
+          const to = Math.max(0, Math.min(WEEKS_N - 1, WEEK + dir));
+          if (to === WEEK) return;
+          WEEK = to;
+          await render(true);
+          edgesPaint();
+          if (PD.st) {
+            PD.st.zone = PD.st.swap = PD.st.edge = null;
+            over();
+          }
+        };
         const over = () => {
           const st = PD.st,
-            z = (document.elementFromPoint(st.x, st.y) || document.body).closest(ZONE);
-          if (z === st.zone) return;
-          if (st.zone) st.zone.classList.remove("drop");
+            hit = document.elementFromPoint(st.x, st.y) || document.body,
+            edge = hit.closest(".pd-edge"),
+            z = edge ? null : hit.closest(ZONE),
+            t = st.kind === "session" && z && !z.hasAttribute("data-shelf-drop") ? hit.closest(SESS_SEL) : null,
+            swap = t && t !== st.el && t.dataset.d && t.dataset.d !== st.from ? t : null;
+          if (z === st.zone && swap === st.swap && edge === st.edge) return;
+          [st.zone, st.swap, st.edge].forEach((x) => x && x.classList.remove("drop", "swap"));
+          clearTimeout(st.edgeT);
           st.zone = z;
-          if (z && z.dataset.date !== st.from) {
+          st.swap = swap;
+          st.edge = edge;
+          if (edge) {
+            edge.classList.add("drop");
+            st.edgeT = setTimeout(() => flip(+edge.dataset.edge), 550);
+            planPreview(null);
+          } else if (z && z.hasAttribute("data-shelf-drop")) {
             z.classList.add("drop");
-            planPreview(st.ref, z, st.tpl);
+            planPreview(null);
+          } else if (z && z.dataset.date !== st.from) {
+            z.classList.add("drop");
+            if (swap) swap.classList.add("swap");
+            planPreview(st.ref, z, st.tpl, swap && { ref: swap.dataset.ref, date: st.from });
           } else planPreview(null);
         };
         const begin = () => {
@@ -8574,11 +10058,21 @@
           st.dy = st.y - r.top;
           g.classList.add("drag-ghost");
           g.removeAttribute("data-ref");
+          g.removeAttribute("data-flip");
+          $$(".rz", g).forEach((x) => x.remove());
           g.style.width = r.width + "px";
           document.body.append(g);
           st.ghost = g;
           st.el.classList.add("dragging");
           document.body.classList.add("dragging-plan");
+          if (st.kind === "session") {
+            const tray = document.createElement("div");
+            tray.className = "pd-shelf";
+            tray.dataset.shelfDrop = "";
+            tray.innerHTML = `${I("folder")}Shelf`;
+            document.body.append(tray);
+          }
+          edgesPaint();
           if (navigator.vibrate) navigator.vibrate(8);
           place();
           over();
@@ -8587,20 +10081,25 @@
           const st = PD.st;
           if (!st) return;
           clearTimeout(st.t);
+          clearTimeout(st.edgeT);
           if (st.ghost) st.ghost.remove();
           st.el.classList.remove("dragging");
           if (st.zone) st.zone.classList.remove("drop");
+          if (st.swap) st.swap.classList.remove("swap");
+          $$(".pd-shelf, .pd-edge").forEach((x) => x.remove());
           document.body.classList.remove("dragging-plan");
           PD.st = null;
           if (st.on) planPreview(null);
         };
         document.addEventListener("pointerdown", (e) => {
+          if (e.target.closest(".rz")) return;
           const el = PD.st || e.button > 0 ? null : e.target.closest(SEL);
           if (!el) return;
           const st = (PD.st = {
             el,
             ref: el.dataset.ref || null,
             tpl: el.dataset.tpl || null,
+            kind: el.dataset.tpl ? "tpl" : el.matches(".shelf-chip") ? "shelf" : "session",
             from: el.dataset.d || "",
             id: e.pointerId,
             x: e.clientX,
@@ -8610,6 +10109,8 @@
             touch: e.pointerType !== "mouse",
             on: false,
             zone: null,
+            swap: null,
+            edge: null,
           });
           if (st.touch) st.t = setTimeout(begin, 350); // a finger needs a long press, or the page could never scroll
         });
@@ -8625,6 +10126,8 @@
           }
           place();
           over();
+          // the shelf and the edge pills sit where autoscroll would otherwise take over
+          if (st.edge || (st.zone && st.zone.hasAttribute("data-shelf-drop"))) return;
           const sc = (st.sc = st.sc || scroller(st.el));
           if (st.y < 80) sc.scrollTop -= 14;
           else if (st.y > innerHeight - 80) sc.scrollTop += 14;
@@ -8632,21 +10135,27 @@
         const finish = async (e) => {
           const st = PD.st;
           if (!st || e.pointerId !== st.id) return;
-          const go = st.on && e.type === "pointerup" && st.zone && st.zone.dataset.date !== st.from,
-            { ref, tpl } = st,
-            date = st.zone && st.zone.dataset.date;
+          const up = st.on && e.type === "pointerup",
+            z = up && !st.edge ? st.zone : null,
+            toShelf = !!z && z.hasAttribute("data-shelf-drop"),
+            date = z && !toShelf && z.dataset.date !== st.from ? z.dataset.date : null,
+            { ref, tpl, kind } = st,
+            swap = st.swap && st.swap.dataset.ref;
           if (st.on) PD.last = Date.now();
           cleanup();
-          if (go) {
-            await (tpl
-              ? planDo("add_template", [tpl, date], "Session added")
-              : planDo("move_session", [ref, date], "Session moved"));
+          if (toShelf && kind === "session")
+            await planDo("skip_session", [ref], ref.startsWith("s:") ? "Session removed" : "Set aside on the shelf");
+          else if (date) {
+            if (kind === "tpl") await planDo("add_template", [tpl, date], "Session added");
+            else if (kind === "shelf") await planDo("unshelve", [ref.slice(2), date], "Session put back");
+            else if (swap) await planDo("swap_sessions", [ref, swap], "Sessions swapped");
+            else await planDo("move_session", [ref, date], "Session moved");
             planSpacing();
           }
         };
         document.addEventListener("pointerup", finish);
         document.addEventListener("pointercancel", finish);
-        document.addEventListener("keydown", (e) => e.key === "Escape" && cleanup());
+        document.addEventListener("keydown", (e) => e.key === "Escape" && (cleanup(), selClear()));
         document.addEventListener("contextmenu", (e) => PD.st && e.preventDefault());
         document.addEventListener("touchmove", (e) => PD.st && PD.st.on && e.preventDefault(), { passive: false });
         // the click that ends a drag must not open the session
@@ -8660,12 +10169,188 @@
           },
           true,
         );
+
+        // ---- pull a session's bottom edge to change its length; the race-day cost shows as you go
+        document.addEventListener("pointerdown", (e) => {
+          const h = e.target.closest(".rz");
+          if (!h || PD.st || e.button > 0) return;
+          e.preventDefault();
+          const el = h.closest(".sess"),
+            dur0 = +el.dataset.dur / 60;
+          PD.rz = { el, id: e.pointerId, y0: e.clientY, ref: el.dataset.ref, dur0, tss0: +el.dataset.tss, mins: dur0 };
+          h.setPointerCapture(e.pointerId);
+        });
+        document.addEventListener("pointermove", (e) => {
+          const r = PD.rz;
+          if (!r || e.pointerId !== r.id) return;
+          const mins = Math.max(5, Math.min(360, Math.round((r.dur0 + (e.clientY - r.y0) / 2) / 5) * 5));
+          if (mins === r.mins) return;
+          r.mins = mins;
+          const m = $(".meta span", r.el);
+          if (m) m.textContent = fmtMins(mins);
+          clearTimeout(r.t);
+          r.t = setTimeout(async () => {
+            const wi = await call("what_if", {
+              edits: [{ ref: r.ref, dur_s: mins * 60, tss: Math.round((r.tss0 * mins) / r.dur0) }],
+            });
+            if (PD.rz === r) planHud(planDelta(wi, { dataset: { label: fmtMins(mins) } }));
+          }, 120);
+        });
+        const endResize = async (e) => {
+          const r = PD.rz;
+          if (!r || e.pointerId !== r.id) return;
+          PD.rz = null;
+          clearTimeout(r.t);
+          planHud("");
+          PD.last = Date.now();
+          if (e.type === "pointerup" && r.mins !== r.dur0) await planDo("fit_session", [r.ref, r.mins], `Fitted into ${r.mins} min`);
+          else render(true);
+        };
+        document.addEventListener("pointerup", endResize);
+        document.addEventListener("pointercancel", endResize);
+
+        // ---- drag across day headers to block a run of days
+        document.addEventListener("pointerdown", (e) => {
+          const h = e.target.closest("[data-lock]");
+          if (!h || PD.st || PD.rz || e.button > 0 || e.pointerType !== "mouse") return;
+          PD.rng = { a: h.dataset.lock, b: h.dataset.lock, id: e.pointerId };
+        });
+        document.addEventListener("pointermove", (e) => {
+          const r = PD.rng;
+          if (!r || e.pointerId !== r.id) return;
+          const h = (document.elementFromPoint(e.clientX, e.clientY) || document.body).closest("[data-lock]");
+          if (!h || h.dataset.lock === r.b) return;
+          r.b = h.dataset.lock;
+          const [lo, hi] = [r.a, r.b].sort();
+          $$("[data-lock]").forEach((x) =>
+            (x.closest("[data-date]") || x).classList.toggle("daysel", x.dataset.lock >= lo && x.dataset.lock <= hi),
+          );
+        });
+        const endRange = (e) => {
+          const r = PD.rng;
+          if (!r || e.pointerId !== r.id) return;
+          PD.rng = null;
+          $$(".daysel").forEach((x) => x.classList.remove("daysel"));
+          if (e.type !== "pointerup" || r.a === r.b) return;
+          const [lo, hi] = [r.a, r.b].sort(),
+            days = PLAND.weeks.flatMap((w) => w.days).filter((x) => x.date >= lo && x.date <= hi && !x.past);
+          PD.last = Date.now();
+          if (days.length > 1) lockSheet(days);
+        };
+        document.addEventListener("pointerup", endRange);
+        document.addEventListener("pointercancel", endRange);
+
+        let sw = null;
+        document.addEventListener(
+          "touchstart",
+          (e) => {
+            const t = e.touches[0];
+            sw = PAGE === "plan" && e.touches.length === 1 && e.target.closest(".mdays") && !PD.selMode ? { x: t.clientX, y: t.clientY } : null;
+          },
+          { passive: true },
+        );
+        document.addEventListener(
+          "touchend",
+          (e) => {
+            const s = sw;
+            sw = null;
+            if (!s || PD.st || Date.now() - PD.last < 500) return; // a drag that ended here is not a swipe
+            const t = e.changedTouches[0],
+              dx = t.clientX - s.x,
+              dy = t.clientY - s.y;
+            if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 2) return;
+            WEEK = Math.max(0, Math.min(WEEKS_N - 1, WEEK + (dx < 0 ? 1 : -1)));
+            render(true);
+          },
+          { passive: true },
+        );
+      }
+
+      // ---- pick several sessions (Ctrl/Shift-click, or Select on a phone) and move, set aside or copy them together
+      const pickClick = (e) => PD.selMode || PD.sel.size || e.ctrlKey || e.metaKey || e.shiftKey;
+      function selClear() {
+        if (!PD.sel.size) return;
+        PD.sel.clear();
+        paintSel();
+      }
+      function togglePick(el) {
+        const ref = el.dataset.ref;
+        PD.sel.has(ref) ? PD.sel.delete(ref) : PD.sel.add(ref);
+        paintSel();
+      }
+      function paintSel() {
+        $$(SESS_SEL).forEach((el) => el.classList.toggle("picked", PD.sel.has(el.dataset.ref)));
+        selBar();
+      }
+      function selChange(kind) {
+        const edits = [];
+        let skipped = 0;
+        for (const ref of PD.sel) {
+          const hit = locate(ref);
+          if (!hit) continue;
+          if (kind === "aside") {
+            ref.startsWith("s:") ? skipped++ : edits.push({ ref, date: null });
+            continue;
+          }
+          const to = addDays(hit.day.date, kind === "copy" ? 7 : kind === "later" ? 1 : -1);
+          if (!canLand(to)) {
+            skipped++;
+            continue;
+          }
+          const s = hit.s;
+          edits.push(
+            kind === "copy"
+              ? { ref: "", date: to, sport: s.sport, dur_s: s.dur_s, tss: s.tss, desc: s.desc }
+              : { ref, date: to },
+          );
+        }
+        return { change: { edits }, skipped };
+      }
+      const SELKINDS = [
+        ["earlier", "left", "Earlier", "Moved a day earlier"],
+        ["later", "right", "Later", "Moved a day later"],
+        ["aside", "folder", "Set aside", "Set aside on the shelf"],
+        ["copy", "plus", "Copy +1 week", "Copied to next week"],
+      ];
+      function selBar() {
+        let bar = $(".pd-selbar");
+        const n = PD.sel.size;
+        if (!n) return bar && bar.remove();
+        if (!bar) {
+          bar = document.createElement("div");
+          bar.className = "pd-selbar";
+          document.body.append(bar);
+        }
+        bar.innerHTML = `<b>${n} selected</b>${SELKINDS.map(([k, ic, l]) => `<button class="btn sm" data-sk="${k}">${I(ic)}${l}</button>`).join("")}<button class="btn sm" data-sk="clear">Clear</button><div class="why small muted"></div>`;
+        $$("[data-sk]", bar).forEach((b) => {
+          const k = b.dataset.sk,
+            kind = SELKINDS.find((x) => x[0] === k);
+          if (k === "clear") return (b.onclick = selClear);
+          b.onmouseenter = b.onfocus = async () => {
+            const { change, skipped } = selChange(k),
+              why = $(".why", bar);
+            if (!change.edits.length) return (why.textContent = "None of these can go there.");
+            const wi = await call("what_if", change);
+            why.innerHTML = deltaText(wi) + (skipped ? `<div class="small muted">${skipped} can't go there and stay put.</div>` : "");
+          };
+          b.onclick = async () => {
+            const { change } = selChange(k);
+            if (!change.edits.length) return toast("Nothing to do", "None of these can go there.", "warn");
+            PD.sel.clear();
+            paintSel();
+            await planDo("apply_change", [change, `${kind[3]} (${change.edits.length})`], kind[3]);
+            planSpacing();
+          };
+        });
       }
       function lockSheet(day) {
-        const cur = day.lock;
+        const days = Array.isArray(day) ? day : [day],
+          many = days.length > 1;
+        day = days[0];
+        const cur = many ? null : day.lock;
         let kind = cur ? cur.kind : "busy";
         modal(
-          `<div class="modal-h"><div><h3>${esc(shortDate(day.date))}</h3><div class="sub">The plan moves its own sessions off a blocked day. Anything you placed yourself stays.</div></div><button class="icon-btn" data-close>${I("x")}</button></div>
+          `<div class="modal-h"><div><h3>${many ? `${esc(shortDate(day.date))} to ${esc(shortDate(days[days.length - 1].date))} · ${days.length} days` : esc(shortDate(day.date))}</h3><div class="sub">The plan moves its own sessions off a blocked day. Anything you placed yourself stays.</div></div><button class="icon-btn" data-close>${I("x")}</button></div>
     <div class="modal-b"><div class="seg" id="lockK">${[
       ["off", "Day off"],
       ["travel", "Travelling"],
@@ -8688,7 +10373,8 @@
         $("#lockSave").onclick = () => {
           const note = $("#lockN").value;
           closeModal();
-          planDo("set_lock", [day.date, kind, note], "Day blocked");
+          if (many) planDo("block_days", [days.map((x) => x.date), kind, note], `${days.length} days blocked`);
+          else planDo("set_lock", [day.date, kind, note], "Day blocked");
         };
         if ($("#lockDel"))
           $("#lockDel").onclick = () => {
@@ -8725,6 +10411,37 @@
               )
               .join("")
           : `<span class="small muted">Set up an interval session once, save it, then drag it onto any day.</span>`;
+      // sessions set aside: drag one back onto a day, or tap it to pick the day
+      let SHELF = [];
+      const shelfRow = () =>
+        `<div class="shelfrow"><span class="small muted">${I("folder")} Shelf</span>${
+          SHELF.length
+            ? SHELF.map(
+                (x) =>
+                  `<div class="shelf-chip" style="--c:${col(x.sport)}" data-ref="${x.ref}" data-flip="shelf:${x.uid}" data-shelf="${x.uid}" title="${esc(x.desc)}"><b>${esc(x.sport)}</b><span>${esc(x.dur)} · ${x.tss} TSS${x.was ? ` · from ${esc(shortDate(x.was))}` : ""}</span></div>`,
+              ).join("")
+            : `<span class="empty-hint">Drag a session off the calendar to set it aside. It waits here until you want it.</span>`
+        }</div>`;
+      function shelfSheet(x) {
+        modal(
+          `<div class="modal-h"><div class="row">${badge(x.sport)}<b>On the shelf</b></div><button class="icon-btn" data-close>${I("x")}</button></div>
+    <div class="modal-b"><div class="row" style="gap:10px;margin-bottom:12px"><span class="pill">${I("clock")}${x.dur}</span><span class="pill">${I("bolt")}${x.tss} TSS</span></div>
+      <div>${esc(x.desc)}</div>
+      <label class="row small muted" style="gap:6px;margin-top:16px">Put back on <input type="date" class="input" id="shDay" min="${PLANRANGE.min}" max="${PLANRANGE.max}" style="width:auto;height:32px"></label></div>
+    <div class="modal-f">${x.was ? "" : `<button class="btn danger" id="shDel">${I("trash")}Throw away</button>`}<span class="grow"></span><button class="btn" data-close>Close</button></div>`,
+          { width: 460 },
+        );
+        $("#shDay").onchange = (e) => {
+          if (!e.target.value) return;
+          closeModal();
+          planDo("unshelve", [x.uid, e.target.value], "Session put back");
+        };
+        if ($("#shDel"))
+          $("#shDel").onclick = async () => {
+            closeModal();
+            deleted(await call("discard_shelved", x.uid), "session");
+          };
+      }
       function newSession() {
         store.set("liveMode", "intervals");
         IV.state = "setup";
@@ -9187,9 +10904,22 @@
       const adaptCard = (d) =>
         d.adapt ? `<div class="small muted" style="margin:0 0 10px">${esc(d.adapt.note)} You can turn this off under Shape my plan.</div>` : "";
       function planWire(d, w) {
+        PLAND = d;
+        WEEKS_N = d.weeks.length;
+        SHELF = d.shelf || [];
         $$(".orphanDrop").forEach((b) => (b.onclick = () => planDo("resolve_orphan", [b.dataset.u], "Change discarded")));
         planDragInit();
         $$(".tpl").forEach((el) => (el.onclick = () => tplSheet(TPLS[el.dataset.tpl])));
+        $$(".shelf-chip").forEach((el) => (el.onclick = () => shelfSheet(SHELF.find((x) => x.uid === el.dataset.shelf))));
+        const here = new Set(d.weeks.flatMap((x) => x.days.flatMap((y) => y.sessions.map((s) => s.ref))));
+        [...PD.sel].forEach((r) => here.has(r) || PD.sel.delete(r));
+        paintSel();
+        if ($("#selB"))
+          $("#selB").onclick = () => {
+            PD.selMode = !PD.selMode;
+            if (!PD.selMode) PD.sel.clear();
+            render(true);
+          };
         if ($("#tplNew")) $("#tplNew").onclick = newSession;
         if ($("#copyW")) $("#copyW").onclick = () => copyWeekSheet(d, w);
         if ($("#tuneB")) $("#tuneB").onclick = () => tuneSheet(d);
@@ -9212,7 +10942,11 @@
         };
         $$("[data-lock]").forEach((el) => (el.onclick = () => lockSheet(dayOf(d, el.dataset.lock))));
         $$(".pm-chip").forEach(
-          (el) => (el.onclick = () => sessionSheet(weekOf(d, el.dataset.d), el.dataset.d, +el.dataset.k)),
+          (el) =>
+            (el.onclick = (e) =>
+              pickClick(e) && el.dataset.ref
+                ? togglePick(el)
+                : sessionSheet(weekOf(d, el.dataset.d), el.dataset.d, +el.dataset.k)),
         );
         const step = (k) => {
           const [y, m] = PMONTH.split("-").map(Number),
@@ -9239,6 +10973,8 @@
       let WEEK = null;
       PAGES.plan = async (c) => {
         const d = await call("plan");
+        SHELF = d.shelf || [];
+        planFocus(d);
         OUTLOOK.base = await call("what_if", {});
         OUTLOOK.cur = null;
         const tpls = (await call("templates")).items;
@@ -9293,7 +11029,7 @@
       <div class="seg" id="pview"><button type="button" data-v="week" class="${view === "week" ? "on" : ""}">Week</button><button type="button" data-v="month" class="${view === "month" ? "on" : ""}">Month</button></div>
       <button class="btn sm primary" id="addB">${I("plus")}Add…</button>
       ${view === "week" ? `<button class="btn sm" id="weekB">${I("cal")}Set this week…</button><button class="btn sm" id="copyW">${I("list")}Copy week…</button><button class="btn sm" id="remakeW">${I("refresh")}Remake this week</button>${!w.current && cur ? `<button class="btn sm" id="toNow">This week</button>` : ""}` : ""}</div></div>
-    <div class="card-b"><div class="row wrap" style="gap:8px;margin-bottom:12px"><span class="small muted">Drag onto a day:</span>${tplChips(tpls)}</div>${
+    <div class="card-b"><div class="row wrap" style="gap:8px;margin-bottom:12px"><span class="small muted">Drag onto a day:</span>${tplChips(tpls)}</div>${shelfRow()}${
       view === "month"
         ? monthHtml(d)
         : `<div class="cal">${w.days
@@ -9307,9 +11043,9 @@
                 (
                   s,
                   k,
-                ) => `<div class="sess ${s.done ? "done" : ""}" style="--c:${col(s.sport)}" data-d="${day.date}" data-k="${k}" ${dragAttr(s, day)}>
+                ) => `<div class="sess ${s.done ? "done" : ""}" style="--c:${col(s.sport)}" data-d="${day.date}" data-k="${k}" data-dur="${s.dur_s}" data-tss="${s.tss}" ${dragAttr(s, day)}>
         <div class="top"><span style="color:${col(s.sport)}">${esc(s.sport)}${s.pinned ? ` <span class="pinI" title="Pinned">${I("target")}</span>` : ""}</span>${s.done ? `<span class="check">${I("check")}</span>` : ""}</div>
-        ${s.dur_s ? `<div class="meta"><span>${s.dur}</span><span>·</span><span>${s.tss} TSS</span></div>` : ""}<p>${esc(s.desc)}</p></div>`,
+        ${s.dur_s ? `<div class="meta"><span>${s.dur}</span><span>·</span><span>${s.tss} TSS</span></div>` : ""}<p>${esc(s.desc)}</p>${dragAttr(s, day) && s.dur_s && !s.sched ? `<div class="rz" title="Drag to change the length"></div>` : ""}</div>`,
               )
               .join("")
           : `<div class="small faint" style="margin:auto;text-align:center">Rest</div>`
@@ -9334,6 +11070,7 @@
           : `<div class="small muted" style="margin:0 0 4px">Keep a version of the plan beside this one. Show draws it on the outlook, Apply makes it real. Save one from Tune the plan or Set this week.</div>${scnCard(SCN)}`
     }</div></div>
   </div>`;
+        SHELF = d.shelf || [];
         planWire(d, w);
         $$(".wk").forEach(
           (el) =>
@@ -9383,7 +11120,11 @@
             kind: "Easy",
           });
         };
-        $$(".sess").forEach((el) => (el.onclick = () => sessionSheet(w, el.dataset.d, +el.dataset.k)));
+        $$(".sess").forEach(
+          (el) =>
+            (el.onclick = (e) =>
+              pickClick(e) && el.dataset.ref ? togglePick(el) : sessionSheet(w, el.dataset.d, +el.dataset.k)),
+        );
       };
       // an interval session rep by rep: what each part is and how long it takes
       function partsList(p) {
@@ -9473,6 +11214,7 @@
           next = up[0],
           target = up.find((r) => r.target);
         const span = up.length ? Math.max(30, up[up.length - 1].days) : 1;
+        const plan = up.length ? await call("plan") : null;
         const list = (rs, past) =>
           `<div class="wlist">${rs
             .map(
@@ -9501,7 +11243,7 @@
     <div class="card-b">${
       up.length
         ? `<div class="season"><div class="axis"></div><div class="now" style="left:0"><span>Today</span></div>
-      ${up.map((r) => `<div class="pin" style="left:${Math.min(97, Math.max(3, (r.days / span) * 100))}%;--c:${PRIO[r.priority]}" onclick="openRace(${r.id})" title="${esc(r.name)}"><div class="dotp"></div><small>${esc(r.name)}</small><em>${esc(r.nice.split(", ").slice(1).join(", "))}</em></div>`).join("")}</div>`
+      ${up.map((r) => `<div class="pin" data-id="${r.id}" style="left:${Math.min(97, Math.max(3, (r.days / span) * 100))}%;--c:${PRIO[r.priority]}" title="${esc(r.name)}: drag to move, tap for options"><div class="dotp"></div><small>${esc(r.name)}</small><em>${esc(r.nice.split(", ").slice(1).join(", "))}</em></div>`).join("")}</div>${phaseBand(plan, span)}`
         : `<div class="empty">${I("flag")}<b>No races scheduled</b>Add any race: a 5K, marathon, ultra, gran fondo, open-water swim, triathlon, rowing… You can schedule as many as you like.<div style="margin-top:12px"><button class="btn primary" onclick="editRace()">${I("plus")}Add your first race</button></div></div>`
     }</div></div>
   ${
@@ -9528,6 +11270,122 @@
   }
   </div>`;
         $$("tr[data-id], .witem[data-id]").forEach((tr) => (tr.onclick = () => openRace(+tr.dataset.id)));
+        seasonDrag(up, span);
+      }
+      // the plan's phases laid under the season, so moving a race shows what it does to the build
+      function phaseBand(plan, span) {
+        if (!plan || !plan.weeks.length) return "";
+        const runs = [];
+        plan.weeks.forEach((w) => {
+          const a = daysFrom(w.days[0].date);
+          const last = runs[runs.length - 1];
+          if (last && last.name === w.phase) last.to = a + 7;
+          else runs.push({ name: w.phase, from: a, to: a + 7 });
+        });
+        const pct = (x) => Math.max(0, Math.min(100, (x / span) * 100));
+        return `<div class="phband" title="Plan phases">${runs
+          .filter((x) => x.to > 0 && x.from < span)
+          .map((x, i) => `<i style="left:${pct(x.from)}%;width:${pct(x.to) - pct(x.from)}%;--k:${[18, 34, 52, 26][i % 4]}">${esc(x.name)}</i>`)
+          .join("")}</div>`;
+      }
+      const daysFrom = (iso) => Math.round((new Date(iso + "T00:00") - new Date(BOOT.today + "T00:00")) / 864e5);
+      // drag a pin to move the race (the HUD says what that does to race day); tap it for priority and options
+      function seasonDrag(up, span) {
+        const box = $(".season");
+        if (!box) return;
+        $$(".season .pin").forEach((pin) => {
+          const r = up.find((x) => x.id === +pin.dataset.id);
+          pin.onpointerdown = (e) => {
+            e.preventDefault();
+            const rect = box.getBoundingClientRect();
+            let days = r.days,
+              moved = false,
+              seq = 0,
+              t = null;
+            const move = (ev) => {
+              if (!moved && Math.abs(ev.clientX - e.clientX) < 5) return;
+              moved = true;
+              pin.classList.add("drag");
+              document.body.classList.add("dragging-plan");
+              days = Math.max(1, Math.min(span, Math.round(((ev.clientX - rect.left) / rect.width) * span)));
+              pin.style.left = Math.min(97, Math.max(3, (days / span) * 100)) + "%";
+              const iso = addDays(BOOT.today, days),
+                q = ++seq;
+              clearTimeout(t);
+              t = setTimeout(async () => {
+                const wi = r.target ? await call("what_if", { race_date: iso }) : null;
+                if (q !== seq) return;
+                const dl = wi && wi.delta;
+                planHud(
+                  `<b>${esc(r.name)}</b> · ${esc(shortDate(iso))} (${days} d)${dl ? ` · form ${sgn(dl.form)}` : ""}${dl && dl.finish_s != null && Math.abs(dl.finish_s) >= 1 ? ` · finish ${sgn(dl.finish_s, clk)}` : ""}${r.target ? "" : " · not the plan target, so the plan stays put"}`,
+                );
+              }, 100);
+            };
+            const end = () => {
+              document.removeEventListener("pointermove", move);
+              document.removeEventListener("pointerup", end);
+              document.removeEventListener("pointercancel", end);
+              clearTimeout(t);
+              document.body.classList.remove("dragging-plan");
+              planHud("");
+              if (!moved) return racePop(r);
+              if (days === r.days) return render(true);
+              planDo("move_race", [r.id, addDays(BOOT.today, days)], `Moved ${r.name}`);
+            };
+            document.addEventListener("pointermove", move);
+            document.addEventListener("pointerup", end);
+            document.addEventListener("pointercancel", end);
+          };
+        });
+      }
+      function racePop(r) {
+        modal(
+          `<div class="modal-h"><div><h3>${esc(r.name)}</h3><div class="sub">${esc(r.nice)}</div></div><button class="icon-btn" data-close>${I("x")}</button></div>
+    <div class="modal-b"><div class="small muted" style="margin-bottom:8px">Priority</div>
+      <div class="seg" id="rpPri">${["A", "B", "C"].map((p) => `<button data-p="${p}" class="${r.priority === p ? "on" : ""}">${p}</button>`).join("")}</div>
+      <div class="small muted" style="margin-top:10px">A: the plan peaks and tapers · B: short taper · C: training race, no taper.</div></div>
+    <div class="modal-f"><button class="btn" onclick="closeModal();editRace(${r.id})">${I("edit")}Edit</button><span class="grow"></span><button class="btn primary" onclick="closeModal();openRace(${r.id})">${I("flag")}Open race</button></div>`,
+          { width: 420 },
+        );
+        $$("#rpPri button").forEach(
+          (b) =>
+            (b.onclick = () => {
+              if (b.dataset.p === r.priority) return;
+              closeModal();
+              planDo("set_race_priority", [r.id, b.dataset.p], `${r.name} is now a ${b.dataset.p} race`);
+            }),
+        );
+      }
+      // sliders over the levers a race responds to, each re-running the prediction without saving anything
+      function wireLevers(id, d) {
+        const out = $("#wiOut");
+        if (!out) return;
+        let t = null,
+          seq = 0;
+        const run = () => {
+          const deltas = {};
+          $$("[data-lever]").forEach((x) => (deltas[x.dataset.lever] = +x.value));
+          clearTimeout(t);
+          t = setTimeout(async () => {
+            const q = ++seq,
+              r = await call("race_whatif", id, deltas);
+            if (q !== seq || !r.ok) return;
+            out.innerHTML = `<b>${esc(r.total)}</b> ${r.gain ? `<span style="color:var(--${r.gain > 0 ? "ok" : "bad"})">${r.gain > 0 ? "−" : "+"}${mmss(Math.abs(r.gain))}</span>` : `<span class="muted">as predicted</span>`}<div class="small muted">${r.legs.map((l) => `${esc(l.sport)} ${esc(l.time)}`).join(" · ")}</div>`;
+          }, 100);
+        };
+        $$("[data-lever]").forEach(
+          (x) =>
+            (x.oninput = () => {
+              $("#lv-" + x.dataset.lever).textContent = (+x.value > 0 ? "+" : "") + +x.value;
+              run();
+            }),
+        );
+        $("#wiReset").onclick = () => {
+          $$("[data-lever]").forEach((x) => {
+            x.value = 0;
+            x.oninput();
+          });
+        };
       }
       async function raceDetail(c, id) {
         const d = await call("race", id);
@@ -9595,7 +11453,7 @@
     <div class="card-b"><div class="grid g4" style="margin-bottom:20px">${d.fueling.tiles.map((t, i) => `<div class="card kpi flat"><div class="l">${I(["fire", "bolt", "drop", "target"][i])}${esc(t.label)}</div><div class="v" style="font-size:22px">${esc(t.value)}</div><div class="s">${esc(t.sub)}</div></div>`).join("")}</div>
     <div class="timeline">${d.fueling.timeline.map((t) => `<div class="tl"><div class="when">${esc(t.when)}</div><div class="body"><b>${esc(t.what)}</b><span>${esc(t.detail)}</span></div></div>`).join("")}</div></div></div>
 
-  <div class="grid ${d.runs.length && d.needle.length ? "g2" : ""} mt">
+  <div class="grid ${d.runs.length && (d.needle.length || d.levers.length) ? "g2" : ""} mt">
     ${
       d.runs.length
         ? `<div class="card"><div class="card-h"><div><h3>Run predictions</h3><div class="sub">Fresh legs · anchored on ${esc(d.anchor)}</div></div></div>
@@ -9604,16 +11462,25 @@
         : ""
     }
     ${
-      d.needle.length
+      d.needle.length || d.levers.length
         ? `<div class="card"><div class="card-h"><div><h3>What moves the needle</h3><div class="sub">Time saved in this race for each improvement</div></div></div>
-      <div class="card-b">${hbar(d.needle.map((n) => ({ l: n.label, t: "−" + n.time, v: n.secs, c: n.secs === needleMax ? "var(--ok)" : "var(--brand)" })))}</div></div>`
+      <div class="card-b">${d.needle.length ? hbar(d.needle.map((n) => ({ l: n.label, t: "−" + n.time, v: n.secs, c: n.secs === needleMax ? "var(--ok)" : "var(--brand)" }))) : ""}
+      ${
+        d.levers.length
+          ? `<div class="small muted" style="margin:16px 0 6px;font-weight:600;text-transform:uppercase;letter-spacing:.06em">Try it</div>
+      ${d.levers.map((l) => `<div class="lever"><span>${esc(l.label)}</span><input type="range" data-lever="${l.key}" min="${l.lo}" max="${l.hi}" step="${l.step}" value="0"><output id="lv-${l.key}">0</output></div>`).join("")}
+      <div id="wiOut" class="mt"><b>${esc(d.total)}</b> <span class="muted">as predicted</span></div>
+      <button class="btn sm mt" id="wiReset">${I("undo")}Reset</button>`
+          : ""
+      }</div></div>`
         : ""
     }
   </div>
 
   <div class="grid ${d.backyard || d.notes ? "g2" : ""} mt">
     <div class="card"><div class="card-h"><div><h3>Race checklist</h3><div class="sub" id="packed">${packed} of ${items.length} packed</div></div><div style="width:140px" class="bar"><i id="packedBar" style="width:${(packed / items.length) * 100}%;background:var(--ok)"></i></div></div>
-      <div class="card-b checks" style="columns:2;column-gap:28px">${d.checklist.map((g) => `<div style="break-inside:avoid"><div class="check-group">${esc(g.group)}</div>${g.items.map((x) => `<label class="${x.done ? "done" : ""}"><input type="checkbox" data-k="${esc(x.key)}" ${x.done ? "checked" : ""}><span>${esc(x.text)}</span></label>`).join("")}</div>`).join("")}</div></div>
+      <div class="card-b checks" style="columns:2;column-gap:28px">${d.checklist.map((g) => `<div style="break-inside:avoid"><div class="check-group">${esc(g.group)}</div>${g.items.map((x) => `<label class="${x.done ? "done" : ""}"><input type="checkbox" data-k="${esc(x.key)}" ${x.done ? "checked" : ""}><span>${esc(x.text)}</span>${x.custom ? `<button type="button" class="chk-x" data-del="${esc(x.text)}" title="Remove">${I("x")}</button>` : ""}</label>`).join("")}</div>`).join("")}</div>
+      <form class="row" id="chkAdd" style="gap:8px;padding:0 18px 16px"><input class="input grow" id="chkText" placeholder="Add your own item" maxlength="80"><select class="input" id="chkGroup" style="width:auto">${d.checklist.map((g) => `<option>${esc(g.group)}</option>`).join("")}</select><button class="btn">${I("plus")}Add</button></form></div>
     ${
       d.backyard || d.notes
         ? `<div class="card"><div class="card-h"><div><h3>${d.backyard ? "Self-supported race logistics" : "Notes"}</h3></div>${d.backyard ? '<span class="pill warn">Safety</span>' : ""}</div>
@@ -9632,6 +11499,18 @@
             toast("Plan now builds to " + s.name);
             refreshAll();
           };
+        wireLevers(id, d);
+        $("#chkAdd").onsubmit = (e) => {
+          e.preventDefault();
+          if ($("#chkText").value.trim()) planDo("add_check", [id, $("#chkGroup").value, $("#chkText").value], "Added to the checklist");
+        };
+        $$("[data-del]").forEach(
+          (b) =>
+            (b.onclick = (e) => {
+              e.preventDefault();
+              planDo("delete_check", [id, b.dataset.del], "Removed from the checklist");
+            }),
+        );
         $$(".checks input").forEach(
           (x) =>
             (x.onchange = async () => {
@@ -9756,6 +11635,7 @@
           if (!r.ok) return toast("Could not save race", r.error, "bad");
           closeModal();
           toast(id ? "Race updated" : "Race added", o.name);
+          promoteBests(r.new_bests);
           RACEVIEW = r.id;
           if (PAGE !== "races") {
             await go("races");
@@ -9774,6 +11654,45 @@
 
       // ------------------------------------------------------------------ nutrition
       let NDATE = null;
+      // Nutrition: the week's targets at a glance (tap a day to open it) and a "what if I trained this long" slider
+      // that asks the engine for the day's targets without changing the page's date.
+      const nutExtras = (d) => `<div class="card mt"><div class="card-b">
+    <div class="small muted" style="font-weight:600;margin-bottom:8px">This week</div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px">${d.strip
+      .map(
+        (x) => `<button type="button" class="btn sm" data-nd="${x.date}" style="flex-direction:column;gap:2px;padding:8px 2px;height:auto;${x.sel ? "border-color:var(--brand);background:var(--well)" : ""}" aria-label="${x.dow}: ${x.kcal} kcal">
+      <b>${x.dow}</b><span class="small">${x.kcal}</span><span class="small muted">${x.carbs}g C</span><span class="small faint">${x.hours ? x.hours + "h" : "rest"}</span></button>`,
+      )
+      .join("")}</div>
+    <div class="row wrap" style="margin-top:14px;gap:12px;align-items:center"><span class="small" style="white-space:nowrap">If I train <b id="nhV">${d.hours}</b> h</span>
+      <input type="range" id="nhR" min="0" max="6" step="0.25" value="${d.hours}" style="flex:1;min-width:120px"><button type="button" class="btn sm" id="nhX">Reset</button></div>
+    <div class="small muted" id="nhOut" style="margin-top:6px"></div></div></div>`;
+      const nutWire = (d) => {
+        $$("[data-nd]").forEach(
+          (b) =>
+            (b.onclick = () => {
+              NDATE = b.dataset.nd;
+              render(true);
+            }),
+        );
+        let t = 0;
+        const out = $("#nhOut"),
+          r = $("#nhR");
+        const ask = () => {
+          $("#nhV").textContent = r.value;
+          clearTimeout(t);
+          t = setTimeout(async () => {
+            const w = await call("nutrition", d.date, r.value),
+              dk = w.kcal - d.kcal;
+            out.innerHTML = +r.value === d.hours ? "" : `${w.kcal.toLocaleString()} kcal (${dk >= 0 ? "+" : ""}${dk}) · ${w.macros.map((m) => `${m.name} ${m.g} g`).join(" · ")}`;
+          }, 150);
+        };
+        r.oninput = ask;
+        $("#nhX").onclick = () => {
+          r.value = d.hours;
+          ask();
+        };
+      };
       PAGES.nutrition = async (c) => {
         const d = await call("nutrition", NDATE || BOOT.today);
         NDATE = d.date;
@@ -9788,6 +11707,7 @@
 
   ${d.heat && d.heat.extra ? `<div class="banner mt">${I("sun")}<div class="grow"><b>${esc(d.heat.temp)}, ${esc(d.heat.sky)}.</b> ${esc(d.heat.note)}</div></div>` : ""}
   ${d.race ? `<div class="card mt" style="border-color:var(--brand)"><div class="card-b row">${I("flag")}<b>Race day: ${esc(d.race.name)}.</b><span class="muted">Your race fueling plan has the details.</span><span class="grow"></span><button class="btn sm primary" onclick="openRace(${d.race.id})">Open race plan</button></div></div>` : ""}
+  ${nutExtras(d)}
   <div class="grid g-main mt">
     <div class="card"><div class="card-h"><div><h3>Daily targets</h3><div class="sub">Carbohydrate periodised to training load (ACSM/IOC g/kg ranges)</div></div></div>
       <div class="card-b"><div class="row" style="gap:28px;align-items:center;flex-wrap:wrap">
@@ -9853,6 +11773,7 @@
   <div class="card mt"><div class="card-h"><div><h3>Principles</h3><div class="sub">General guidance for healthy adults. Not medical advice.</div></div></div>
     <div class="card-b"><div class="principles">${d.principles.map(([t, b]) => `<div><b>${esc(t)}</b><span>${esc(b)}</span></div>`).join("")}</div></div></div>
   </div>`;
+        nutWire(d);
         const shift = (n) => {
           const x = new Date(NDATE + "T00:00");
           x.setDate(x.getDate() + n);
@@ -9882,8 +11803,84 @@
       };
 
       // ------------------------------------------------------------------ wellness
+      // Wellness: a 12-week "how did I feel" grid (the mean of the four ratings, since readiness itself is only
+      // computed for today), an edit sheet for any day, and a range for the trend charts.
+      const WL_RANGES = [[14, "14 check-ins"], [30, "30"], [0, "All"]];
+      const wlRange = (d) => {
+        const n = store.get("wl.range", 0);
+        if (n) for (const k in d.charts) d.charts[k] = d.charts[k].slice(-n);
+      };
+      const wlHeat = (d) => {
+        const by = Object.fromEntries(d.rows.map((r) => [r.date, r])),
+          end = Date.parse(d.today + "T00:00Z"),
+          start = end - (((new Date(end).getUTCDay() + 6) % 7) + 77) * 864e5,
+          cur = store.get("wl.range", 0);
+        const cell = (t) => {
+          if (t > end) return `<i style="width:16px;height:16px"></i>`;
+          const day = new Date(t).toISOString().slice(0, 10),
+            r = by[day],
+            v = r ? [r.fatigue, r.soreness, r.stress, r.mood].filter(Boolean) : [],
+            f = v.length ? v.reduce((a, b) => a + b) / v.length : null,
+            c = !r ? "well" : f == null ? "muted" : f <= 2 ? "ok" : f <= 3.5 ? "warn" : "bad";
+          return `<button type="button" data-hd="${day}" aria-label="${day}${r ? ", " + (f == null ? "logged" : "feel " + f.toFixed(1) + " of 5, lower is better") : ", no check-in"}" title="${day}${f == null ? "" : " · " + f.toFixed(1) + "/5"}" style="width:16px;height:16px;border-radius:4px;border:1px solid var(--border);padding:0;background:var(--${c});opacity:${r ? 1 : 0.6};cursor:pointer"></button>`;
+        };
+        let g = "";
+        for (let i = 0; i < 84; i++) g += cell(start + i * 864e5);
+        return `<div class="card mt"><div class="card-h"><div><h3>Last 12 weeks</h3><div class="sub">How you felt each morning (green = fresh). ${MOBILE ? "Tap" : "Click"} a day to log or edit it.</div></div>
+    <div class="row" style="gap:6px"><span class="small muted">Charts</span><div class="seg" id="wlRange">${WL_RANGES.map(([n, l]) => `<button type="button" data-n="${n}" class="${n === cur ? "on" : ""}">${l}</button>`).join("")}</div></div></div>
+    <div class="card-b"><div style="display:grid;grid-template-rows:repeat(7,16px);grid-auto-flow:column;grid-auto-columns:16px;gap:4px;justify-content:start;overflow-x:auto">${g}</div></div></div>`;
+      };
+      function wlSheet(d, date) {
+        const r = d.rows.find((x) => x.date === date) || {},
+          rate = (k, label) => `<div class="field"><span>${label}</span><input type="hidden" name="${k}" value="${r[k] || ""}">
+    <div class="seg rate" data-r="${k}">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-n="${n}" class="${+r[k] === n ? "on" : ""}">${n}</button>`).join("")}</div></div>`;
+        const num = (k, label, unit, step = "any") =>
+          `<label class="field"><span>${label}</span><div class="adorn"><input name="${k}" type="number" step="${step}" inputmode="decimal" value="${r[{ weight_kg: "weight", sleep_h: "sleep" }[k] || k] ?? ""}"><em>${unit}</em></div></label>`;
+        const m = modal(
+          `<div class="modal-h"><div><h3>${esc(shortDate(date))}</h3><div class="small muted">${r.date ? "Edit this check-in" : "No check-in yet. Add one"}</div></div><button class="icon-btn" data-close>${I("x")}</button></div>
+  <form class="modal-b form-grid" id="wsf" autocomplete="off"><input type="hidden" name="date" value="${date}">
+    ${num("weight_kg", "Weight", d.weight_unit)}${num("sleep_h", "Sleep", "hours", "0.25")}${num("rhr", "Resting HR", "bpm")}${num("hrv", "HRV", "ms")}
+    ${rate("fatigue", "General fatigue")}${rate("soreness", "Muscle soreness")}${rate("stress", "Life stress")}${rate("mood", "Low mood")}
+    <label class="field full"><span>Notes</span><input name="notes" value="${esc(r.notes || "")}"></label></form>
+  <div class="modal-f">${r.date ? `<button class="btn danger" id="wsDel">${I("trash")}Delete</button>` : ""}<span class="grow"></span><button class="btn" data-close>Cancel</button><button class="btn primary" id="wsGo">${I("check")}Save</button></div>`,
+          { width: 520 },
+        );
+        $$("[data-r] button", m).forEach(
+          (b) =>
+            (b.onclick = () => {
+              const inp = $(`input[name=${b.parentElement.dataset.r}]`, m),
+                off = b.classList.contains("on");
+              inp.value = off ? "" : b.dataset.n;
+              $$("button", b.parentElement).forEach((x) => x.classList.toggle("on", !off && x === b));
+            }),
+        );
+        $("#wsGo").onclick = async () => {
+          const res = await call("save_wellness", Object.fromEntries(new FormData($("#wsf"))));
+          if (!res.ok) return toast("Could not save", res.error, "bad");
+          closeModal();
+          toast("Check-in saved");
+          refreshAll();
+        };
+        if ($("#wsDel"))
+          $("#wsDel").onclick = async () => {
+            closeModal();
+            deleted(await call("delete_wellness", date), `check-in for ${shortDate(date)}`);
+          };
+      }
+      const wlWire = (d) => {
+        $$("[data-d]").forEach((tr) => (tr.onclick = () => wlSheet(d, tr.dataset.d)));
+        $$("[data-hd]").forEach((b) => (b.onclick = () => wlSheet(d, b.dataset.hd)));
+        $$("#wlRange button").forEach(
+          (b) =>
+            (b.onclick = () => {
+              store.set("wl.range", +b.dataset.n);
+              refreshAll();
+            }),
+        );
+      };
       PAGES.wellness = async (c) => {
         const d = await call("wellness");
+        wlRange(d);
         const t = d.rows.find((r) => r.date === d.today);
         // 1-5 buttons: tap to pick, tap the picked one again to clear (a slider can't express "not rated")
         const slider = (
@@ -9942,7 +11939,8 @@
     <div class="card"><div class="card-h"><h3>Sleep</h3>${legend([["Hours", "#8b5cf6"]])}</div><div class="card-b"><div id="cS"></div></div></div></div>`
       : ""
   }
-  <div class="card mt"><div class="card-h"><div><h3>History</h3><div class="sub">${MOBILE ? "Tap" : "Click"} a row to load it into the form</div></div></div>
+  ${wlHeat(d)}
+  <div class="card mt"><div class="card-h"><div><h3>History</h3><div class="sub">${MOBILE ? "Tap" : "Click"} a row to edit it</div></div></div>
     <div class="card-b" style="padding:10px 0 4px">${
       d.rows.length && MOBILE
         ? d.rows
@@ -10004,6 +12002,7 @@
               $("#content").scrollTo({ top: 0, behavior: "smooth" });
             }),
         );
+        wlWire(d);
         $$("[data-del]").forEach(
           (b) =>
             (b.onclick = async (e) => {
@@ -10044,6 +12043,83 @@
       };
 
       // ------------------------------------------------------------------ zones
+      // Field tests: type a result and see the zones and race-day prediction move before applying it. The plan
+      // calendar isn't on this page, so "schedule" is a button with a date rather than a drag.
+      const zoneDiff = (r) =>
+          r.after
+            .map((g, gi) => {
+              const was = r.before[gi];
+              const rows = g.zones.filter((z, i) => z.range !== was.zones[i].range);
+              return rows.length
+                ? `<div class="small muted" style="margin-top:6px">${esc(g.title)}</div>` +
+                    rows
+                      .map((z) => {
+                        const b = was.zones[g.zones.indexOf(z)];
+                        return `<div class="small" style="display:flex;gap:6px;justify-content:space-between"><span>${esc(z.name)}</span><span><s class="faint">${esc(b.range)}</s> → <b>${esc(z.range)}</b></span></div>`;
+                      })
+                      .join("")
+                : "";
+            })
+            .join("");
+      const previewHtml = (r) => {
+        const body = zoneDiff(r);
+        const race = r.race
+          ? `<div class="small" style="margin-top:6px">${esc(r.race.name)}: <s class="faint">${r.race.before}</s> → <b>${r.race.after}</b> <span style="color:var(--${r.race.diff_s <= 0 ? "ok" : "warn"})">${r.race.diff_s === 0 ? "no change" : `${Math.floor(Math.abs(r.race.diff_s) / 60)}:${String(Math.abs(r.race.diff_s) % 60).padStart(2, "0")}${r.race.diff_s < 0 ? " faster" : " slower"}`}</span></div>`
+          : "";
+        return body || race ? `<div class="small"><b>If you apply this</b></div>${body}${race}` : `<div class="small muted">Zones don't change.</div>`;
+      };
+      function driftPreviews(d) {
+        $$("[data-drift]").forEach(async (b) => {
+          const x = d.drift[+b.dataset.drift],
+            r = await call("preview_drift", x.key, x.value);
+          if (!r.ok || !b.isConnected) return;
+          const box = document.createElement("div");
+          box.style.cssText = "margin-top:8px;flex-basis:100%";
+          box.innerHTML = previewHtml(r);
+          b.before(box);
+        });
+      }
+      function wireTests() {
+        $$("[data-apply]").forEach((b) => {
+          const k = b.dataset.apply,
+            box = document.createElement("div"),
+            vals = () => $$(`[data-t=${k}]`).map((x) => x.value);
+          box.className = "tprev";
+          box.style.marginTop = "10px";
+          b.before(box);
+          let timer = 0;
+          $$(`[data-t=${k}]`).forEach((x) =>
+            x.addEventListener("input", () => {
+              clearTimeout(timer);
+              timer = setTimeout(async () => {
+                if (vals().some((v) => !v.trim())) return (box.innerHTML = "");
+                const r = await call("preview_test", k, vals());
+                if (!r.ok) return (box.innerHTML = "");
+                box.innerHTML = previewHtml(r);
+              }, 250);
+            }),
+          );
+          b.onclick = async () => {
+            if (vals().some((v) => !v.trim())) return toast("Fill in the test result first", "", "warn");
+            const r = await call("apply_test", k, vals());
+            if (!r.ok) return toast("Check the inputs", r.error, "bad");
+            toast("Profile updated", r.msg);
+            refreshAll();
+          };
+          const sb = document.createElement("div");
+          sb.style.cssText = "display:flex;gap:6px;margin-top:8px;align-items:center";
+          sb.innerHTML = `<input type="date" class="tdate" style="flex:1;min-width:0"><button class="btn sm" type="button">Schedule test</button>`;
+          b.after(sb);
+          const di = $(".tdate", sb);
+          di.value = new Date(Date.now() + 2 * 864e5 - new Date().getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
+          $("button", sb).onclick = async () => {
+            const r = await call("schedule_test", k, di.value);
+            if (!r.ok) return toast("Could not schedule", r.error, "bad");
+            toast("Test scheduled", `On your plan for ${di.value}.`, "ok", r.undo ? { label: "Undo", run: () => call("undo", r.undo).then(() => refreshAll()) } : null);
+          };
+        });
+      }
+
       PAGES.zones = async (c) => {
         const d = await call("zones");
         const has = (s) => d.sports.includes(s);
@@ -10118,18 +12194,7 @@
     )
     .join("")}</div>
   </div>`;
-        $$("[data-apply]").forEach(
-          (b) =>
-            (b.onclick = async () => {
-              const k = b.dataset.apply,
-                vals = $$(`[data-t=${k}]`).map((x) => x.value);
-              if (vals.some((v) => !v.trim())) return toast("Fill in the test result first", "", "warn");
-              const r = await call("apply_test", k, vals);
-              if (!r.ok) return toast("Check the inputs", r.error, "bad");
-              toast("Profile updated", r.msg);
-              refreshAll();
-            }),
-        );
+        wireTests();
       };
 
       // ------------------------------------------------------------------ shared settings fields
@@ -10179,6 +12244,61 @@
         await call("toggle_habit", uid, date, done);
         refreshAll();
       }
+      // Last 12 weeks of one habit, a column per week: filled = done, ringed = scheduled but missed.
+      const habitStrip = (h) => {
+        const done = new Set(h.done84 || []),
+          end = Date.parse(h.asof + "T00:00Z"),
+          start = end - (((new Date(end).getUTCDay() + 6) % 7) + 77) * 864e5;
+        let g = "";
+        for (let i = 0; i < 84; i++) {
+          const t = start + i * 864e5;
+          if (t > end) {
+            g += "<i></i>";
+            continue;
+          }
+          const day = new Date(t).toISOString().slice(0, 10),
+            on = done.has(day),
+            sched = (h.days || []).includes(i % 7);
+          g += `<i title="${day}" style="border-radius:3px;border:1px solid ${on ? "var(--ok)" : sched ? "var(--muted)" : "transparent"};background:${on ? "var(--ok)" : "transparent"}"></i>`;
+        }
+        return `<div class="field full"><span>Last 12 weeks</span><div style="display:grid;grid-template-rows:repeat(7,14px);grid-auto-flow:column;grid-auto-columns:14px;gap:3px;justify-content:start;overflow-x:auto">${g}</div></div>`;
+      };
+      // Pointer-driven reorder on the grip: rows swap as the pointer crosses a neighbour's midpoint, and the new
+      // order is saved on release. Works the same with a finger as with a mouse.
+      function habitWire(d) {
+        const rowSel = $(".mn-habit") ? ".mn-habit" : ".habit";
+        $$("[data-hd]").forEach((b) => {
+          b.onclick = () => {
+            const [uid, date] = b.dataset.hd.split("|");
+            toggleHabit(uid, date, !b.classList.contains("done"));
+          };
+          b.onkeydown = (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), b.click());
+        });
+        $$(".hgrip").forEach((g) => {
+          g.style.cssText = "cursor:grab;touch-action:none;color:var(--faint);display:inline-flex;padding:4px;user-select:none";
+          g.onpointerdown = (e) => {
+            e.preventDefault();
+            const row = g.closest(rowSel),
+              box = row.parentElement;
+            g.setPointerCapture(e.pointerId);
+            row.style.opacity = 0.6;
+            g.onpointermove = (ev) => {
+              const sib = [...box.children].filter((x) => x.matches(rowSel));
+              const over = sib.find((x) => x !== row && ev.clientY > x.getBoundingClientRect().top && ev.clientY < x.getBoundingClientRect().bottom);
+              if (!over) return;
+              const down = sib.indexOf(over) > sib.indexOf(row);
+              const snap = flipSnap();
+              over[down ? "after" : "before"](row);
+              flipPlay(snap);
+            };
+            g.onpointerup = g.onpointercancel = async () => {
+              g.onpointermove = g.onpointerup = g.onpointercancel = null;
+              row.style.opacity = "";
+              await call("reorder_habits", [...box.children].filter((x) => x.matches(rowSel)).map((x) => x.dataset.hu));
+            };
+          };
+        });
+      }
       PAGES.life = async (c) => {
         const d = await call("life");
         const dayNames = (days) =>
@@ -10199,11 +12319,11 @@
         d.habits.length
           ? d.habits
               .map(
-                (h) => `<div class="habit ${h.done ? "done" : ""}">
+                (h) => `<div class="habit ${h.done ? "done" : ""}" data-hu="${esc(h.uid)}" data-flip="h:${esc(h.uid)}"><span class="hgrip" title="Drag to reorder" aria-label="Drag to reorder">⋮⋮</span>
           <label class="hcheck">${h.today ? `<input type="checkbox" ${h.done ? "checked" : ""} onchange="toggleHabit('${h.uid}', '${d.today}', this.checked)">` : '<span class="faint small">off today</span>'}
             <span><b>${esc(h.name)}</b><small>${dayNames(h.days)}${h.streak ? ` · <span class="streak">${h.streak}-day streak</span>` : ""}</small></span></label>
-          <div class="hweek">${h.week.map((w) => `<i class="${w.state}" title="${w.date}: ${w.state}">${w.day}</i>`).join("")}</div>
-          <button class="icon-btn" title="Edit" onclick='editHabit(${JSON.stringify({ uid: h.uid, name: h.name, days: h.days })})'>${I("edit")}</button></div>`,
+          <div class="hweek">${h.week.map((w) => `<i class="${w.state}" ${w.date <= d.today ? `data-hd="${esc(h.uid)}|${w.date}" role="button" tabindex="0" style="cursor:pointer"` : ""} title="${w.date}: ${w.state}">${w.day}</i>`).join("")}</div>
+          <button class="icon-btn" title="Edit" onclick='editHabit(${JSON.stringify({ uid: h.uid, name: h.name, days: h.days, done84: h.done84, asof: d.today })})'>${I("edit")}</button></div>`,
               )
               .join("")
           : `<div class="empty">${I("check")}<b>No habits yet</b>Add small daily wins: stretching, water, reading, lights out on time.</div>`
@@ -10271,6 +12391,7 @@
               ? toast("Notifications on", `${r.count} scheduled for the next week`)
               : toast("Notifications", r.error, "bad");
           };
+        habitWire(d);
         $$("[data-q]").forEach(
           (b) => (b.onclick = async () => deleted(await call("delete_quote", b.dataset.q), "quote")),
         );
@@ -10279,7 +12400,7 @@
         const m = modal(
           `<div class="modal-h"><h3>${h.uid ? "Edit habit" : "New habit"}</h3><button class="icon-btn" data-close>${I("x")}</button></div>
     <form class="modal-b form-grid" id="hf"><label class="field full"><span>Habit</span><input name="name" value="${esc(h.name || "")}" placeholder="e.g. Read 20 minutes"></label>
-      <div class="field full"><span>Days</span>${weekdayChips("days", h.days || [0, 1, 2, 3, 4, 5, 6])}</div></form>
+      <div class="field full"><span>Days</span>${weekdayChips("days", h.days || [0, 1, 2, 3, 4, 5, 6])}</div>${h.uid ? habitStrip(h) : ""}</form>
     <div class="modal-f">${h.uid ? `<button class="btn danger" id="hDel">${I("trash")}Delete</button>` : ""}<span class="grow"></span><button class="btn" data-close>Cancel</button><button class="btn primary" id="hSave">${I("check")}Save</button></div>`,
           { width: 480 },
         );
@@ -10449,7 +12570,7 @@
       <div class="row wrap"><span class="small muted">Severity</span><div class="seg" data-sev="${i.id}">${[1, 2, 3, 4, 5].map((n) => `<button class="${n === i.severity ? "on" : ""}" data-n="${n}" title="${esc(d.severity[n])}: ${esc(d.severity_help[n])}">${n}</button>`).join("")}</div>
         <button class="btn sm" data-edit="${i.id}">${I("edit")}Edit</button><button class="btn sm primary" data-resolve="${i.id}">${I("check")}Mark resolved</button></div></div>
     <div class="card-b grid g2" style="gap:24px">
-      <div><div class="small muted" style="font-weight:600;margin-bottom:4px">How your plan changes</div><p style="margin:0 0 14px">${sevPill(i)} ${esc(i.sev_help)}${i.kind === "Injury" ? " A 15-minute rehab session is added every day." : ""} Once resolved, you'll set a graded ramp instead of jumping straight back to the full plan.</p>
+      <div>${sevSpark(i.log, d.today)}<div class="small muted" style="font-weight:600;margin:10px 0 4px">How your plan changes</div><p style="margin:0 0 14px">${sevPill(i)} ${esc(i.sev_help)}${i.kind === "Injury" ? " A 15-minute rehab session is added every day." : ""} Once resolved, you'll set a graded ramp instead of jumping straight back to the full plan.</p>
         <div class="small muted" style="font-weight:600;margin-bottom:2px">Guidance</div><ul class="clean">${i.guidance.map((g) => `<li>${esc(g)}</li>`).join("")}</ul></div>
       <div>${i.rehab ? `<div class="small muted" style="font-weight:600;margin-bottom:4px">Rehab</div><p style="margin:0 0 14px">${esc(i.rehab)}</p>` : ""}
         ${i.red_flags ? `<div class="flags"><b>${I("info")} Get it checked</b><span>${esc(i.red_flags)}</span></div>` : ""}
@@ -10502,6 +12623,55 @@
           ),
         );
       };
+      // What an issue does to the plan: the engine's read-only what_if with a hypothetical issue row.
+      const hoursLine = (r) =>
+        r && r.ok
+          ? `Next 4 weeks of training: <s class="faint">${r.hours[0]} h</s> → <b style="color:var(--${r.hours[1] < r.hours[0] ? "warn" : "ok"})">${r.hours[1]} h</b>`
+          : "";
+      const sevSpark = (log, today) => {
+        if (!log || log.length < 2) return "";
+        const t = (d) => Date.parse(d) / 864e5,
+          t0 = t(log[0][0]),
+          t1 = Math.max(t(today), t(log[log.length - 1][0])) + 1,
+          W = 160,
+          H = 34;
+        const x = (d) => 4 + ((t(d) - t0) / Math.max(1, t1 - t0)) * (W - 8),
+          y = (v) => H - 4 - ((v - 1) / 4) * (H - 8);
+        let p = `M${x(log[0][0])},${y(log[0][1])}`;
+        log.slice(1).forEach(([d, v]) => (p += `H${x(d)}V${y(v)}`));
+        return `<div class="small muted" style="font-weight:600;margin:10px 0 2px">Severity over time</div><svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Severity over time, ${log.map((l) => l[1]).join(", ")}"><path d="${p}H${W - 4}" fill="none" stroke="var(--brand)" stroke-width="2"/></svg>`;
+      };
+      // Front and back silhouettes. Each hotspot is an existing BODY area; the side follows which way the person
+      // faces (viewer's left is their right from the front, their left from the back).
+      const BODYMAP = {
+        Front: [
+          ["Shoulder", 38, 38, 1], ["Shoulder", 82, 38, -1], ["Wrist / hand", 24, 92, 1], ["Wrist / hand", 96, 92, -1],
+          ["Hip / groin", 50, 102, 1], ["Hip / groin", 70, 102, -1], ["IT band / outer knee", 43, 122, 1],
+          ["IT band / outer knee", 77, 122, -1], ["Knee", 50, 142, 1], ["Knee", 70, 142, -1], ["Shin", 49, 163, 1],
+          ["Shin", 71, 163, -1], ["Ankle", 48, 184, 1], ["Ankle", 72, 184, -1],
+        ],
+        Back: [
+          ["Shoulder", 38, 38, -1], ["Shoulder", 82, 38, 1], ["Lower back", 60, 84, 0], ["Hamstring", 51, 124, -1],
+          ["Hamstring", 69, 124, 1], ["Achilles / calf", 49, 163, -1], ["Achilles / calf", 71, 163, 1],
+          ["Foot / plantar", 48, 194, -1], ["Foot / plantar", 72, 194, 1],
+        ],
+      };
+      const bodyMap = (area, side) =>
+        `<div class="bodymap" style="display:flex;gap:18px;justify-content:center">${Object.entries(BODYMAP)
+          .map(([name, spots]) => {
+            const sd = (k) => (k === 0 ? "" : (name === "Front") === (k === 1) ? "Right" : "Left");
+            return `<svg viewBox="0 0 120 204" width="120" role="group" aria-label="${name} of body"><title>${name}</title>
+  <g fill="none" stroke="var(--border)" stroke-width="3" stroke-linecap="round"><circle cx="60" cy="14" r="10"/><rect x="42" y="30" width="36" height="68" rx="10"/>
+  <path d="M40 36L26 88M80 36L94 88M52 98L48 196M68 98L72 196"/></g>
+  ${spots
+    .map(([a, x, y, k]) => {
+      const on = a === area && (!sd(k) || !side || side === "Both" || side === sd(k));
+      return `<circle class="bm" data-area="${esc(a)}" data-side="${sd(k)}" cx="${x}" cy="${y}" r="7" tabindex="0" role="button" aria-label="${esc(a)}${sd(k) ? ", " + sd(k).toLowerCase() : ""}" style="fill:var(--${on ? "brand" : "panel"});stroke:var(--${on ? "brand" : "muted"});opacity:${on ? 1 : 0.7};cursor:pointer"><title>${esc(a)}${sd(k) ? " (" + sd(k).toLowerCase() + ")" : ""}</title></circle>`;
+    })
+    .join("")}
+  <text x="60" y="203" text-anchor="middle" font-size="8" fill="var(--muted)">${name}</text></svg>`;
+          })
+          .join("")}</div>`;
       const badge2 = (k) => `<span class="badge" style="--c:${KIND_C[k]}"><i></i>${k}</span>`;
       async function openResolve(i) {
         const s = await call("suggest_ramp", i.id);
@@ -10511,10 +12681,26 @@
   <div class="modal-b">
     <p style="margin:0 0 14px">Based on ${esc(i.name).toLowerCase()}'s severity and how long it ran, ${days} days is a sensible ramp: half volume for the first half, three-quarter volume for the second, then back to the full plan.</p>
     <label class="field"><span>Ramp length (days)</span><input type="number" id="rampDays" min="0" max="42" value="${days}"></label>
+    <div class="small" id="rampPrev" style="margin-top:10px"></div>
   </div>
   <div class="modal-f"><span class="grow"></span><button class="btn" data-close>Cancel</button><button class="btn primary" id="resolveGo">${I("check")}Mark resolved</button></div>`,
           { width: 460 },
         );
+        let rt = 0;
+        const rampPrev = () => {
+          clearTimeout(rt);
+          rt = setTimeout(async () => {
+            const n = Math.max(0, Math.min(42, +$("#rampDays").value || 0));
+            const h = HEALTH || (await call("health"));
+            const r = await call("what_if", {
+              issues: [{ id: i.id, kind: i.kind, severity: i.severity, sports: i.sports, area: i.area, start: i.start, end: h.today, ramp_days: n }],
+            });
+            const el = $("#rampPrev");
+            if (el) el.innerHTML = hoursLine(r);
+          }, 200);
+        };
+        $("#rampDays").addEventListener("input", rampPrev);
+        rampPrev();
         $("#resolveGo").onclick = async () => {
           const n = Math.max(0, Math.min(42, +$("#rampDays").value || 0));
           await call("resolve_issue", i.id, n);
@@ -10533,11 +12719,12 @@
   <form class="modal-b" id="isf" autocomplete="off">
     <div class="seg" style="margin-bottom:16px">${d.kinds.map((k) => `<label><input type="radio" name="kind" value="${k}" ${k === kind0 ? "checked" : ""}><span><i class="dot" style="--c:${KIND_C[k]}"></i>${k}</span></label>`).join("")}</div>
     <div class="form-grid">
+      <div class="field inj full"><span>Where does it hurt? <span class="faint" style="font-weight:400">tap the body or pick below</span></span><div id="bmap">${bodyMap(i.area || "Ankle", i.side || "")}</div></div>
       <label class="field inj"><span>Body area</span><select name="area">${d.areas.map((a) => `<option ${a === (i.area || "Ankle") ? "selected" : ""}>${a}</option>`).join("")}</select></label>
       <div class="field inj"><span>Side</span><div class="seg">${["", "Left", "Right", "Both"].map((sd) => `<label><input type="radio" name="side" value="${sd}" ${sd === (i.side || "") ? "checked" : ""}><span>${sd || "n/a"}</span></label>`).join("")}</div></div>
       <label class="field full"><span>Name <span class="faint" style="font-weight:400">optional</span></span><input name="name" value="${esc(i.name || "")}" placeholder="e.g. Rolled ankle on trail run"></label>
       <div class="field full"><span>Severity <b id="sevL" style="color:var(--brand);font-weight:600"></b></span><input type="range" name="severity" min="1" max="5" value="${sev0}">
-        <span class="help" id="sevH"></span></div>
+        <span class="help" id="sevH"></span><div class="small" id="isPrev" style="margin-top:6px"></div></div>
       <div class="field full lim"><span>Can't do these sports</span><div class="chips">${d.sports
         .concat(["Hike", "Walk"].filter((x) => !d.sports.includes(x)))
         .map(
@@ -10555,7 +12742,8 @@
           { width: 640 },
         );
         const f = $("#isf");
-        let touched = !!i.id;
+        let touched = !!i.id,
+          pt = 0;
         const setSports = (list) => $$("input[name=sports]", f).forEach((x) => (x.checked = list.includes(x.value)));
         setSports(i.sports || d.area_sports[i.area || "Ankle"]);
         const sync = () => {
@@ -10564,7 +12752,24 @@
           $$(".lim", m).forEach((x) => (x.style.display = k === "Injury" || k === "Other" ? "" : "none"));
           $("#sevL").textContent = `${f.severity.value} · ${d.severity[f.severity.value]}`;
           $("#sevH").textContent = d.severity_help[f.severity.value];
+          $("#bmap").innerHTML = bodyMap(f.area.value, f.side.value);
+          clearTimeout(pt);
+          pt = setTimeout(async () => {
+            const o = Object.fromEntries(new FormData(f));
+            const r = await call("what_if", {
+              issues: [{ id: i.id, kind: o.kind, severity: +o.severity, sports: $$("input[name=sports]:checked", f).map((x) => x.value), area: o.area, start: o.start, end: o.end }],
+            });
+            const el = $("#isPrev");
+            if (el) el.innerHTML = hoursLine(r);
+          }, 250);
         };
+        $("#bmap").addEventListener("click", (e) => {
+          const b = e.target.closest(".bm");
+          if (!b) return;
+          f.area.value = b.dataset.area;
+          if (b.dataset.side) f.side.value = b.dataset.side;
+          f.dispatchEvent(new Event("input", { bubbles: true }));
+        });
         f.addEventListener("input", (e) => {
           if (e.target.name === "sports") touched = true;
           if (e.target.name === "area" && !touched) setSports(d.area_sports[f.area.value]);
@@ -10943,6 +13148,15 @@
       // mileage accrues on its own from the log (a default item per sport), so the only hand work here is
       // telling the app what you own and when to retire it.
       let GEAR = null;
+      // Twelve bars, one per month, oldest first: a shoe that suddenly takes double the miles shows up here.
+      const gearSpark = (m, unit) => {
+        const hi = Math.max(...(m || [0]), 1);
+        return m && m.some((v) => v)
+          ? `<svg viewBox="0 0 60 18" width="60" height="18" role="img" aria-label="Distance per month, last 12 months, up to ${hi} ${unit}" style="margin-top:4px">${m
+              .map((v, i) => `<rect x="${i * 5}" y="${18 - (v / hi) * 18}" width="3.5" height="${(v / hi) * 18}" rx="1" fill="var(--brand)"><title>${v} ${unit}</title></rect>`)
+              .join("")}</svg>`
+          : "";
+      };
       async function drawGear() {
         const d = (GEAR = await call("gear")),
           el = $("#gearCard");
@@ -10957,6 +13171,7 @@
       </div>
       <div class="small" style="text-align:right;white-space:nowrap">
         <div><b>${g.dist}</b>${g.retire ? ` <span class="muted">/ ${g.retire}${g.pct !== null ? ` · ${g.pct}%` : ""}</span>` : ""}</div>
+        ${gearSpark(g.monthly, d.dist_unit)}
         <div class="muted">${g.dur}</div>
       </div></div>`;
         el.innerHTML = `<div class="card-h"><div><h3>${I("gear")} Gear</h3><div class="sub">Mileage on shoes, bikes and other kit, tallied automatically from your log.</div></div>
@@ -11551,7 +13766,7 @@
           L.tsb > 5 ? "var(--ok)" : L.tsb > -10 ? "var(--brand)" : L.tsb > -30 ? "var(--warn)" : "var(--bad)";
         const acwrC = L.acwr == null ? "var(--faint)" : L.acwr >= 1.35 ? "var(--warn)" : "var(--ok)";
         const tile = (l, v, s, warn) =>
-          `<div class="mile${warn ? " warn" : ""}"><div class="l">${esc(l)}</div><b>${v}</b><div class="s">${esc(s)}</div></div>`;
+          `<div class="mile${warn ? " warn" : ""}" data-load><div class="l">${esc(l)}</div><b>${v}</b><div class="s">${esc(s)}</div></div>`;
         const sess = (s) =>
           `<div class="mcr-sess">${badge(s.sport)}<span class="small">${esc(s.dur)} · ${s.tss} TSS</span></div>`;
         c.innerHTML = `<div class="page">
@@ -11585,6 +13800,7 @@
     <div class="mcr-now"><div class="small muted">Do this instead</div>${d.coached.map(sess).join("")}</div>
     ${d.coached.map((s) => `<p class="small mcr-desc">${esc(s.desc)}</p>`).join("")}
     <div class="small muted" style="margin-top:10px">${I("info")} Nothing is deleted &mdash; the plan rebuilds around what you actually do.</div>
+    ${coachActs(d)}
   </div></div></div>`
       : ""
   }
@@ -11615,7 +13831,7 @@
     <details class="mfold" data-fold="coach.rec" ${rec.hours ? "data-open" : ""}><summary><span class="grow">Recovery<small>${rec.hours ? `${rec.hours} h to go · clear ${esc(new Date(rec.until).toLocaleString("en-US", { weekday: "short", hour: "numeric" }))}` : "Nothing outstanding"}</small></span>${I("right", "i chev")}</summary>
       <div class="body">${
         rec.hours
-          ? `<div class="reclist">${rec.items.map((x) => `<div>${badge(x.sport)}<span class="grow small muted">${esc(shortDate(x.date))} · ${esc(x.dur)} · ${x.tss} TSS</span><b>${x.left} h</b></div>`).join("")}</div>`
+          ? `<div class="reclist">${rec.items.map((x) => `<div data-wid="${x.id}" style="cursor:pointer">${badge(x.sport)}<span class="grow small muted">${esc(shortDate(x.date))} · ${esc(x.dur)} · ${x.tss} TSS</span><b>${x.left} h</b></div>`).join("")}</div>`
           : '<p class="small muted">Your body is square with you.</p>'
       }</div></details>
     <details class="mfold" data-fold="coach.load"><summary><span class="grow">Load<small>The numbers behind the verdict</small></span>${I("right", "i chev")}</summary>
@@ -11641,6 +13857,8 @@
         <button class="btn mwide" onclick="go('wellness')">${I("heart")}${d.readiness == null ? "Check in" : "Update check-in"}</button></div></details>
   </div></div>`;
         mcrWireFolds();
+        coachWire(d);
+        driftPreviews(d);
         $$("[data-drift]").forEach(
           (b) =>
             (b.onclick = async () => {
@@ -11841,6 +14059,8 @@
     )
     .join("")}</div>
 
+  <div class="msec">${nutExtras(d)}</div>
+
   <div class="msec"><h3>Fluids &amp; protein</h3><div class="mcard"><div class="p mn-facts">
     <div>${I("drop")}<span><b>~${esc(d.fluids)}</b> baseline${heat ? ` + ${esc(d.heat.extra)} for the heat` : ""}<small>plus what training takes out</small></span></div>
     <div>${I("bolt")}<span><b>${esc(d.protein_meal)}</b> per meal<small>spread over 4–5 meals</small></span></div></div></div></div>
@@ -11898,6 +14118,7 @@
     )}
   </div></div>`;
         mpWireFolds();
+        nutWire(d);
         const shift = (n) => {
           const x = new Date(NDATE + "T00:00");
           x.setDate(x.getDate() + n);
@@ -11949,11 +14170,11 @@
       d.habits.length
         ? d.habits
             .map(
-              (h) => `<div class="mn-habit ${h.done ? "done" : ""}">
+              (h) => `<div class="mn-habit ${h.done ? "done" : ""}" data-hu="${esc(h.uid)}" data-flip="h:${esc(h.uid)}"><span class="hgrip" title="Drag to reorder" aria-label="Drag to reorder">⋮⋮</span>
       <label class="hcheck">${h.today ? `<input type="checkbox" ${h.done ? "checked" : ""} data-habit="${esc(h.uid)}">` : '<span class="faint small" style="width:24px">off</span>'}
         <span><b>${esc(h.name)}</b><small>${dayNames(h.days)}${h.streak ? ` · <span class="streak">${h.streak}-day streak</span>` : ""}</small></span></label>
       <button class="icon-btn" data-habit-edit="${esc(h.uid)}" aria-label="Edit habit">${I("edit")}</button>
-      <div class="hweek">${h.week.map((w) => `<i class="${w.state}" title="${w.date}: ${w.state}">${w.day}</i>`).join("")}</div></div>`,
+      <div class="hweek">${h.week.map((w) => `<i class="${w.state}" ${w.date <= d.today ? `data-hd="${esc(h.uid)}|${w.date}" role="button" tabindex="0" style="cursor:pointer"` : ""} title="${w.date}: ${w.state}">${w.day}</i>`).join("")}</div></div>`,
             )
             .join("")
         : `<div class="empty">${I("check")}<b>No habits yet</b>Add small daily wins: stretching, water, reading, lights out on time.</div>`
@@ -12021,7 +14242,7 @@
           (b) =>
             (b.onclick = () => {
               const h = d.habits.find((x) => x.uid === b.dataset.habitEdit);
-              editHabit({ uid: h.uid, name: h.name, days: h.days });
+              editHabit({ uid: h.uid, name: h.name, days: h.days, done84: h.done84, asof: d.today });
             }),
         );
         $$("[data-rem]").forEach((b) => (b.onclick = () => editReminder(d.reminders[+b.dataset.rem])));
@@ -12046,6 +14267,7 @@
             ? toast("Notifications on", `${r.count} scheduled for the next week`)
             : toast("Notifications", r.error, "bad");
         };
+        habitWire(d);
         $$("[data-q]").forEach(
           (b) => (b.onclick = async () => deleted(await call("delete_quote", b.dataset.q), "quote")),
         );
@@ -12064,6 +14286,7 @@
 
       MPAGES.wellness = async (c) => {
         const d = await call("wellness");
+        wlRange(d);
         const t = d.rows.find((r) => r.date === d.today);
         const when = new Date(d.today + "T00:00").toLocaleDateString("en-US", {
           weekday: "long",
@@ -12138,7 +14361,8 @@
       : ""
   }
 
-  <div class="msec"><h3>History<span class="muted" style="text-transform:none;letter-spacing:0;font-weight:550">tap to load into the form</span></h3>
+  <div class="msec">${wlHeat(d)}</div>
+  <div class="msec"><h3>History<span class="muted" style="text-transform:none;letter-spacing:0;font-weight:550">tap to edit</span></h3>
     <div class="mcard">${
       d.rows.length
         ? d.rows
@@ -12191,6 +14415,7 @@
               toast("Loaded " + r.nice, "Edit and save to update it.");
             }),
         );
+        wlWire(d);
         $$("[data-del]").forEach(
           (b) =>
             (b.onclick = async (e) => {
@@ -12254,6 +14479,7 @@
     <p>${sevPill(i)} ${esc(i.sev_help)}${i.kind === "Injury" ? " A 15-minute rehab session is added every day." : ""} Once resolved, you'll set a graded ramp instead of jumping straight back to the full plan.</p>
     <div class="small muted" style="font-weight:600;margin-bottom:6px">Severity</div>
     <div class="seg rate" data-sev="${i.id}">${[1, 2, 3, 4, 5].map((n) => `<button class="${n === i.severity ? "on" : ""}" data-n="${n}" title="${esc(d.severity[n])}: ${esc(d.severity_help[n])}">${n}</button>`).join("")}</div>
+    ${sevSpark(i.log, d.today)}
     ${i.red_flags ? `<div class="flags" style="margin-top:12px"><b>${I("info")} Get it checked</b><span>${esc(i.red_flags)}</span></div>` : ""}
     ${mfold("Guidance", "What to do while it is active", `<ul class="clean" style="margin-top:10px">${i.guidance.map((g) => `<li>${esc(g)}</li>`).join("")}</ul>`)}
     ${i.rehab ? mfold("Rehab", "Exercises that help", `<p style="margin:10px 0 0">${esc(i.rehab)}</p>`) : ""}
@@ -12398,18 +14624,7 @@
           f.open = store.get(id, f.dataset.zf === "0");
           f.addEventListener("toggle", () => store.set(id, f.open));
         });
-        $$("[data-apply]").forEach(
-          (b) =>
-            (b.onclick = async () => {
-              const k = b.dataset.apply,
-                vals = $$(`[data-t=${k}]`).map((x) => x.value);
-              if (vals.some((v) => !v.trim())) return toast("Fill in the test result first", "", "warn");
-              const r = await call("apply_test", k, vals);
-              if (!r.ok) return toast("Check the inputs", r.error, "bad");
-              toast("Profile updated", r.msg);
-              refreshAll();
-            }),
-        );
+        wireTests();
       };
 
       // ---- phone: live workout. A workout screen, not a form: huge clock, two big readouts, controls in thumb reach.
@@ -12457,6 +14672,7 @@
               "Workout saved",
               `${LIVE.sport} · ${fmtClock(r.dur_s)} · ${(r.dist_km * (LIVE.unit === "mi" ? 0.621371 : 1)).toFixed(2)} ${LIVE.unit}`,
             );
+            promoteBests(res.new_bests);
             refreshAll();
             go("log");
           };
