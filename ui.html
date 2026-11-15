@@ -6202,6 +6202,14 @@
         if (after) after();
         refreshAll();
       }
+      // A threshold change re-scores old power rides; say so, and let it be undone.
+      function rescoreNote(r) {
+        if (!r || !r.rescored) return false;
+        toast("Rides re-scored", `${r.rescored} bike ride${r.rescored === 1 ? "" : "s"} now use your new FTP.`, "ok",
+          r.undo ? { label: "Undo", run: () => call("undo", r.undo).then(() => refreshAll()) } : null);
+        return true;
+      }
+
       function confirmBox(title, msg, okText = "Delete", danger = true) {
         return new Promise((res) => {
           const m = modal(
@@ -7257,7 +7265,7 @@
               const x = d.drift[+b.dataset.drift];
               const r = await call("apply_drift", x.key, x.value);
               if (!r.ok) return toast("Could not apply", r.error, "bad");
-              toast(`${x.what} updated`, `Now ${x.suggested}. Zones, paces and the plan follow it.`);
+              rescoreNote(r) || toast(`${x.what} updated`, `Now ${x.suggested}. Zones, paces and the plan follow it.`);
               refreshAll();
             }),
         );
@@ -12148,7 +12156,7 @@
             if (vals().some((v) => !v.trim())) return toast("Fill in the test result first", "", "warn");
             const r = await call("apply_test", k, vals());
             if (!r.ok) return toast("Check the inputs", r.error, "bad");
-            toast("Profile updated", r.msg);
+            rescoreNote(r) || toast("Profile updated", r.msg);
             refreshAll();
           };
           const sb = document.createElement("div");
@@ -12535,7 +12543,7 @@
       <div class="card-b"><div class="data-grid"><div><b>${info.counts.workouts}</b><span>workouts</span></div><div><b>${info.counts.races}</b><span>races</span></div><div><b>${info.counts.wellness}</b><span>check-ins</span></div></div>
         <div class="small muted desktop-only">Version <b>${esc(BOOT.version || "")}</b> · data file: <code>${esc(info.path)}</code></div>
         <div class="small muted desktop-only" style="margin-top:6px">${info.backups} automatic backup${info.backups === 1 ? "" : "s"} (one per launch, newest 20 kept)${info.last_backup ? ` · latest <code>${esc(info.last_backup)}</code>` : ""}</div>
-        <div class="row wrap" style="margin-top:14px"><button type="button" class="btn" onclick="openSetup()">${I("refresh")}Run setup again</button><button type="button" class="btn" id="expAll">${I("down")}Export all data</button><button type="button" class="btn" id="impAll">${I("up")}Restore from export</button><button type="button" class="btn desktop-only" id="openDir">${I("folder")}Open data folder</button></div></div></div>
+        <div class="row wrap" style="margin-top:14px"><button type="button" class="btn" onclick="openSetup()">${I("refresh")}Run setup again</button><button type="button" class="btn" id="expAll">${I("down")}Export all data</button><button type="button" class="btn" id="impAll">${I("up")}Restore from export</button><button type="button" class="btn" id="rescoreBtn">${I("refresh")}Re-score bike rides</button><button type="button" class="btn desktop-only" id="openDir">${I("folder")}Open data folder</button></div></div></div>
     <div class="card" id="skinCard"></div>
     <div class="card desktop-only" id="updateCard"></div>
     <div class="card mobile-only" id="appSrcCard"></div>
@@ -12562,6 +12570,12 @@
         MOBILE
           ? (drawPhoneSync(), drawAppSource(), drawHealth(), drawErrorLog())
           : (drawHub(), drawUpdates(), drawWatchFolder());
+        $("#rescoreBtn").onclick = async () => {
+          const r = await call("rescore_workouts");
+          if (!r.n) return toast("Nothing to change", "Every bike ride with power already matches your FTP.");
+          rescoreNote({ rescored: r.n, undo: r.undo });
+          refreshAll();
+        };
         $("#expAll").onclick = async () => {
           const r = await call("export_all");
           if (!r.cancelled) toast("Data exported", r.path);
@@ -12597,7 +12611,7 @@
             }
             return toast("Could not save", r.error, "bad");
           }
-          toast("Settings saved", "Plan, predictions, zones and nutrition updated.");
+          rescoreNote(r) || toast("Settings saved", "Plan, predictions, zones and nutrition updated.");
           refreshAll();
         };
       };
@@ -13928,7 +13942,7 @@
               const x = d.drift[+b.dataset.drift];
               const r = await call("apply_drift", x.key, x.value);
               if (!r.ok) return toast("Could not apply", r.error, "bad");
-              toast(`${x.what} updated`, `Now ${x.suggested}. Zones, paces and the plan follow it.`);
+              rescoreNote(r) || toast(`${x.what} updated`, `Now ${x.suggested}. Zones, paces and the plan follow it.`);
               refreshAll();
             }),
         );
@@ -14861,7 +14875,7 @@
     <div class="msec"><h3>Data &amp; sync</h3>
       <div class="mcard"><div class="p"><div class="data-grid"><div><b>${info.counts.workouts}</b><span>workouts</span></div><div><b>${info.counts.races}</b><span>races</span></div><div><b>${info.counts.wellness}</b><span>check-ins</span></div></div>
         <div class="small muted" style="margin-top:8px">${I("shield")} Stored on this phone, saved automatically as you go.</div>
-        <div class="mpbtns"><button type="button" class="btn" onclick="openSetup()">${I("refresh")}Run setup again</button><button type="button" class="btn" id="expAll">${I("down")}Export all data</button><button type="button" class="btn" id="impAll">${I("up")}Restore from export</button></div></div></div>
+        <div class="mpbtns"><button type="button" class="btn" onclick="openSetup()">${I("refresh")}Run setup again</button><button type="button" class="btn" id="expAll">${I("down")}Export all data</button><button type="button" class="btn" id="impAll">${I("up")}Restore from export</button><button type="button" class="btn" id="rescoreBtn">${I("refresh")}Re-score bike rides</button></div></div></div>
       <div class="card" id="syncCard" style="margin-top:10px"></div>
       <div class="card" id="appSrcCard" style="margin-top:10px"></div>
       <div class="card" id="healthCard" style="margin-top:10px"></div>
@@ -14886,6 +14900,12 @@
         drawAppSource();
         drawHealth();
         drawGear();
+        $("#rescoreBtn").onclick = async () => {
+          const r = await call("rescore_workouts");
+          if (!r.n) return toast("Nothing to change", "Every bike ride with power already matches your FTP.");
+          rescoreNote({ rescored: r.n, undo: r.undo });
+          refreshAll();
+        };
         $("#expAll").onclick = async () => {
           const r = await call("export_all");
           if (!r.cancelled) toast("Data exported", r.path);
@@ -14923,7 +14943,7 @@
             }
             return toast("Could not save", r.error, "bad");
           }
-          toast("Settings saved", "Plan, predictions, zones and nutrition updated.");
+          rescoreNote(r) || toast("Settings saved", "Plan, predictions, zones and nutrition updated.");
           refreshAll();
         };
       };

@@ -1649,6 +1649,17 @@ def rpe_if(rpe):
     return 0.45 + 0.055 * max(1.0, min(10.0, rpe or 5))
 
 
+def max_if(hours):
+    """Highest intensity factor a session of this length is scored at. A safety net, not an estimate: 1.2 up to an
+    hour, easing (log-linearly) to 0.85 at six hours and beyond. Stale or mistaken thresholds - an FTP of 90 W against
+    a 160 W ride - otherwise score a whole-day ride as if every minute were a 1.2 effort. The ceiling sits well above
+    what people actually hold: full-distance bike legs average IF ~0.67-0.75 (coaching pacing guides; TrainerRoad's
+    medians ~0.70), Olympic-distance legs 0.80-0.88."""
+    if hours <= 1:
+        return 1.2
+    return max(0.85, 1.2 - 0.35 * math.log(hours) / math.log(6))
+
+
 def estimate_tss(p, sport, dur_s, dist_km=0, rpe=None, avg_hr=None, avg_w=None):
     """Power > pace > HR > RPE, the usual TrainingPeaks-style hierarchy."""
     h = (dur_s or 0) / 3600
@@ -1661,12 +1672,12 @@ def estimate_tss(p, sport, dur_s, dist_km=0, rpe=None, avg_hr=None, avg_w=None):
         IF = p["run_thr_pace"] / (dur_s / dist_km)
     elif sport == "Swim" and dist_km and p["css"]:
         ratio = p["css"] / (dur_s / (dist_km * 10))
-        return round(h * min(ratio, 1.2) ** 3 * 100, 1)
+        return round(h * min(ratio, max_if(h)) ** 3 * 100, 1)
     if IF is None and avg_hr and p["lthr"]:
         IF = avg_hr / p["lthr"]  # ponytail: linear hrTSS approximation, TRIMP if HR streams get imported
     if IF is None:
         IF = rpe_if(rpe)
-    tss = h * min(IF, 1.2) ** 2 * 100
+    tss = h * min(IF, max_if(h)) ** 2 * 100
     return round(tss * (0.5 if sport in ("Strength", "Mobility") else 1), 1)
 
 
@@ -6685,7 +6696,8 @@ class Api:
             return dict(ok=False, error="Unknown setting")
         P[key] = float(value)
         self._save()
-        return dict(ok=True)
+        done = self._rescore_power() if key == "ftp" else None
+        return dict(ok=True, rescored=done["n"] if done else 0, undo=done["undo"] if done else None)
 
     # ---- log
     @_locked
@@ -6910,6 +6922,28 @@ class Api:
                 for p in pts
             ],
         )
+
+    def _rescore_power(self, label="Re-scored rides for the new FTP"):
+        """Bike/Brick TSS is stored when a ride is saved, so a changed FTP leaves old rides scored against the old
+        one. Recompute the ones scored from power. Returns dict(n, undo), or None if nothing moved."""
+        rows = [dict(r) for r in self._db.execute(
+            "SELECT * FROM workouts WHERE sport IN ('Bike','Brick') AND avg_w>0 AND dur_s>0")]
+        moved = []
+        for r in rows:
+            new = estimate_tss(P, r["sport"], r["dur_s"], r["dist_km"] or 0, r["rpe"], r["avg_hr"], r["avg_w"])
+            if abs(new - (r["tss"] or 0)) >= 0.05:
+                moved.append((r, new))
+        if not moved:
+            return None
+        token = self._remember("workouts", [r for r, _ in moved], label=label)
+        self._db.executemany("UPDATE workouts SET tss=? WHERE id=?", [(new, r["id"]) for r, new in moved])
+        self._db.commit()
+        return dict(n=len(moved), undo=token)
+
+    @_locked
+    def rescore_workouts(self):
+        done = self._rescore_power("Re-scored rides")
+        return dict(ok=True, n=done["n"] if done else 0, undo=done["undo"] if done else None)
 
     @_locked
     def delete_workouts(self, ids):
@@ -10156,6 +10190,7 @@ class Api:
             return dict(ok=False, error=str(e) or "Check the inputs")
         P.update(upd)
         self._save()
+        done = self._rescore_power() if "ftp" in upd else None
         show = {
             "ftp": lambda x: f"FTP {x:.0f} W",
             "lthr": lambda x: f"LTHR {x:.0f} bpm",
@@ -10163,7 +10198,8 @@ class Api:
             "css": lambda x: f"CSS {fd('swim', x)}",
             "run_thr_pace": lambda x: f"Threshold {fd('pace', x)}",
         }
-        return dict(ok=True, msg=", ".join(show[k](x) for k, x in upd.items() if k in show))
+        return dict(ok=True, msg=", ".join(show[k](x) for k, x in upd.items() if k in show),
+                    rescored=done["n"] if done else 0, undo=done["undo"] if done else None)
 
     @_locked
     def preview_test(self, kind, vals):
@@ -10311,7 +10347,8 @@ class Api:
         P.update(upd)
         P["units"] = vals.get("units", P["units"])
         self._save()
-        return dict(ok=True)
+        done = self._rescore_power() if "ftp" in upd else None
+        return dict(ok=True, rescored=done["n"] if done else 0, undo=done["undo"] if done else None)
 
     # ---- data safety
     @_locked
