@@ -3067,8 +3067,13 @@ def race_tss(total_s):
     return h * IF * IF * 100
 
 
+def goal_uids(p):
+    """The goals the plan builds toward: plan_goal holds one uid, or several joined by commas."""
+    return [u for u in str(p.get("plan_goal") or "").split(",") if u]
+
+
 def pick_target(p, races, today):
-    if p.get("plan_goal"):  # the plan is building toward a goal, not a race
+    if p.get("plan_goal"):  # the plan is building toward goals, not a race
         return None
     upcoming = [r for r in races if dt.date.fromisoformat(r["date"]) >= today]
     chosen = next((r for r in upcoming if p.get("plan_race") and r.get("uid") == p.get("plan_race")), None)
@@ -3908,10 +3913,12 @@ def build_plan(
     tgt = targets(p, target, tpred)
     av = {int(k): float(v) for k, v in (p.get("availability") or {}).items() if str(k).isdigit()}
     gt, gend = p.get("goal_target"), None
+    extras = p.get("goal_extra") or []  # the other goals being built toward; `gt` is the one that closes the block
     mix = [l["sport"] for l in target["legs"]] if target else p["sports"]
-    if gt and not target and gt.get("sport"):  # train the goal's sport and your next race's
+    gsp = list(dict.fromkeys(x["sport"] for x in [gt, *extras] if x and x.get("sport")))
+    if gt and not target and gsp:  # train the goals' sports and your next race's
         nxt = min((r for r in races if r["date"] >= today.isoformat()), key=lambda r: r["date"], default=None)
-        mix = [gt["sport"]] + [l["sport"] for l in (nxt["legs"] if nxt else []) if l["sport"] != gt["sport"]]
+        mix = gsp + [l["sport"] for l in (nxt["legs"] if nxt else []) if l["sport"] not in gsp]
     tmpl, noway, lday = plan_template(p, mix)
     gs = set(p.get("goal_sports") or ())
     if gs:  # goals tilt the week toward their sports; the shares are renormalised, so the shift is modest
@@ -4108,6 +4115,27 @@ def build_plan(
         cp = goal_checkpoint(gt)
         if cp:
             add(gend, cp[0], cp[1], cp[1] / 3600 * cp[2] ** 2 * 100, cp[3], None)
+        tests = [gend]
+        for ex in extras:  # each other goal gets its own test, on its date or just before the closing one
+            ecp = goal_checkpoint(ex)
+            if not ecp:
+                continue
+            ed = min(dt.date.fromisoformat(ex["end"]) if ex.get("end") else gend - 3 * ONE, gend - 2 * ONE)
+            while any(abs((ed - t).days) <= 1 for t in tests):  # never two tests on neighbouring days
+                ed -= ONE
+            if ed <= week0 + 2 * ONE:
+                continue
+            tests.append(ed)
+            drop(ed)
+            around_race(
+                ed - ONE,
+                "Test day tomorrow: keep it light.",
+                ex.get("sport") or p["sports"][0],
+                1200,
+                12.0,
+                "Easy 20 min with 3-4 short pickups.",
+            )
+            add(ed, ecp[0], ecp[1], ecp[1] / 3600 * ecp[2] ** 2 * 100, ecp[3], None)
         weeks[-1]["sessions"] = [s for s in weeks[-1]["sessions"] if s[0] <= gend]
     first_day, last_day = weeks[0]["start"], (end_day or gend or weeks[-1]["start"] + 6 * ONE)
     for r in races:
@@ -6109,7 +6137,7 @@ class Api:
                 dict(
                     goal_progress(g, cur, today),
                     uid=g["uid"],
-                    building=g["uid"] == P.get("plan_goal"),
+                    building=g["uid"] in goal_uids(P),
                     title=f"{goal_title(g)} {goal_fmt(g, g['target'])}",
                     now=goal_fmt(g, cur),
                     start=goal_fmt(g, g["start_val"]),
@@ -6161,10 +6189,10 @@ class Api:
 
     @_locked
     def delete_goal(self, uid):
-        was = P.get("plan_goal") == uid
-        out = self._take("goals", "uid", [uid], profile={"plan_goal": uid} if was else None)
+        was = uid in goal_uids(P)
+        out = self._take("goals", "uid", [uid], profile={"plan_goal": P.get("plan_goal") or ""} if was else None)
         if was:
-            P["plan_goal"] = ""
+            P["plan_goal"] = ",".join(u for u in goal_uids(P) if u != uid)
             self._save()
         return out
 
@@ -6188,14 +6216,23 @@ class Api:
         kw.update(over)
         gs = sorted({g["sport"] or GOAL_SPORT.get(g["kind"]) for g in self._goals()} - {None})
         pp = dict(p or P, goal_sports=gs)
-        g = self._plan_goal()
-        if g:
-            sport = g["sport"] or GOAL_SPORT.get(g["kind"])
-            gt = dict(kind=g["kind"], sport=sport, end=g["by_date"] or "", target=g["target"], uid=g["uid"],
-                      fmt_dist=f"{leg_dist_ui(sport, g['dist_km'])} {'km' if not imp() else 'mi'}" if g["dist_km"] else "")
-            pp.update(goal_target=gt, goal_boost=1.6, goal_sports=[sport] if sport else gs)  # another goal's sport must not ride along
-            if g["kind"] == "volume":  # a weekly-hours goal is the top of the ramp
-                pp["peak_hours"] = max(float(g["target"]), float(pp["weekly_hours"]))
+        gl = self._plan_goals()
+        if gl:
+            def goal_target(g):
+                sport = g["sport"] or GOAL_SPORT.get(g["kind"])
+                dist = f"{leg_dist_ui(sport, g['dist_km'])} {'km' if not imp() else 'mi'}" if g["dist_km"] else ""
+                return dict(kind=g["kind"], sport=sport, end=g["by_date"] or "", target=g["target"], uid=g["uid"],
+                            fmt_dist=dist)
+
+            gts = [goal_target(g) for g in gl]
+            main = max(gts, key=lambda t: t["end"])  # the latest date closes the block (no dates: the first goal)
+            sports = sorted({t["sport"] for t in gts if t["sport"]})
+            # a goal you are not building toward must not ride along, so only these goals' sports are leaned on
+            pp.update(goal_target=main, goal_extra=[t for t in gts if t is not main], goal_boost=1.6,
+                      goal_sports=sports or gs)
+            vols = [float(g["target"]) for g in gl if g["kind"] == "volume"]
+            if vols:  # a weekly-hours goal is the top of the ramp
+                pp["peak_hours"] = max(*vols, float(pp["weekly_hours"]))
         cut = (dt.date.today() - dt.timedelta(days=56)).isoformat()
         hist = {}
         for r in self._workouts():
@@ -6212,10 +6249,12 @@ class Api:
                     info.update(ad)
         return build_plan(pp, races, ctl=series[-1][1], **kw)
 
-    def _plan_goal(self):
-        """The goal the plan builds toward, while it still can (a date that has passed no longer anchors a plan)."""
-        g = next((x for x in self._goals() if x["uid"] == P.get("plan_goal")), None)
-        return g if g and (not g["by_date"] or g["by_date"] >= dt.date.today().isoformat()) else None
+    def _plan_goals(self):
+        """The goals the plan builds toward, in the order they were added, while they still can (a date that has
+        passed no longer anchors a plan)."""
+        have = {g["uid"]: g for g in self._goals()}
+        today = dt.date.today().isoformat()
+        return [g for g in map(have.get, goal_uids(P)) if g and (not g["by_date"] or g["by_date"] >= today)]
 
     def _projection(self, target, weeks, series, until=None):
         """CTL/ATL from today to the target's race morning (or `until`'s, for the campaign), following the plan."""
@@ -7214,9 +7253,10 @@ class Api:
 
     def _building(self, target):
         """What the plan is for, in a line: a race, a goal or neither."""
-        g = self._plan_goal()
-        if g:
-            return dict(kind="goal", label=f"{goal_title(g)} {goal_fmt(g, g['target'])}", date=g["by_date"] or "")
+        gl = self._plan_goals()
+        if gl:
+            label = " + ".join(f"{goal_title(g)} {goal_fmt(g, g['target'])}" for g in gl)
+            return dict(kind="goal", label=label, date=max(g["by_date"] or "" for g in gl))
         if target:
             return dict(kind="race", label=target["name"], date=target["date"])
         return dict(kind="open", label="", date="")
@@ -7243,6 +7283,21 @@ class Api:
         P.update(plan_goal=uid or "", plan_race="" if uid else P["plan_race"])
         self._save()
         return dict(ok=True, undo=self._remember("plan_weeks", [], profile=was, label="Changed the plan target"))
+
+    @_locked
+    def toggle_plan_goal(self, uid):
+        """Add a goal to the ones the plan builds toward, or take it off again. Several can be built toward at once:
+        the plan leans on all their sports and gives each its own test."""
+        if not any(g["uid"] == uid for g in self._goals()):
+            return dict(ok=False, error="That goal no longer exists")
+        was = {k: P[k] for k in ("plan_race", "plan_goal")}
+        have = goal_uids(P)
+        now = [u for u in have if u != uid] if uid in have else [*have, uid]
+        P.update(plan_goal=",".join(now), plan_race="" if now else P["plan_race"])
+        self._save()
+        label = "Added a goal to the plan" if uid in now else "Took a goal off the plan"
+        undo = self._remember("plan_weeks", [], profile=was, label=label)
+        return dict(ok=True, on=uid in now, count=len(now), undo=undo)
 
     # ---- plan edits: the athlete moves, pins, skips and adds sessions; the generator rebuilds around them
     def _remember(self, table, before, created=(), profile=None, label=""):

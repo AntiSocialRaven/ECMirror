@@ -10618,7 +10618,7 @@
       const targetOptions = (d) =>
         `<option value="0">Auto (next A race)</option>${d.races.map((r) => `<option value="${r.id}" ${r.id === d.plan_race && !d.plan_goal ? "selected" : ""}>${esc(r.name)} (${r.priority})</option>`).join("")}` +
         (d.goal_options.length
-          ? `<optgroup label="Goals">${d.goal_options.map((g) => `<option value="g:${g.uid}" ${g.uid === d.plan_goal ? "selected" : ""}>${esc(g.title)}</option>`).join("")}</optgroup>`
+          ? `<optgroup label="Goals">${d.plan_goal.includes(",") ? `<option value="" selected disabled>${d.plan_goal.split(",").length} goals together</option>` : ""}${d.goal_options.map((g) => `<option value="g:${g.uid}" ${g.uid === d.plan_goal ? "selected" : ""}>${esc(g.title)}</option>`).join("")}</optgroup>`
           : "");
       const pickTarget = async (v) => {
         await (v.startsWith("g:") ? call("set_plan_goal", v.slice(2)) : call("set_plan_race", +v));
@@ -10633,7 +10633,7 @@
                 (g) => `<div class="goal" data-u="${g.uid}" style="padding:10px 0;border-top:1px solid var(--border)">
       <div class="row wrap" style="justify-content:space-between;gap:8px"><div style="min-width:0"><b>${esc(g.title)}</b>${g.by_date ? ` <span class="small muted">by ${esc(g.by_date)}</span>` : ""}
         <div class="small muted">${esc(g.start)} → ${esc(g.now)}</div></div>
-        <button class="btn sm goalBuild" ${g.building ? 'data-off="1"' : ""}>${g.building ? "Building toward this · stop" : "Build the plan toward this"}</button>
+        <button class="btn sm goalBuild" ${g.building ? 'data-off="1"' : ""}>${g.building ? "In the plan · remove" : items.some((x) => x.building) ? "Add to the plan too" : "Build the plan toward this"}</button>
         <button class="icon-btn goalDel" aria-label="Delete goal">${I("trash")}</button></div>
       <div class="bar" style="height:8px;margin:8px 0 6px"><i style="width:${g.pct}%;background:${g.reached ? "var(--ok)" : "var(--brand)"}"></i></div>
       <div class="small ${g.reached ? "" : "muted"}">${esc(g.note)}</div></div>`,
@@ -10681,9 +10681,9 @@
           $(".goalDel", el).onclick = () => planDo("delete_goal", [el.dataset.u], "Goal deleted");
           $(".goalBuild", el).onclick = (ev) =>
             planDo(
-              "set_plan_goal",
-              [ev.currentTarget.dataset.off ? "" : el.dataset.u],
-              ev.currentTarget.dataset.off ? "Back to your race" : "The plan now builds toward this goal",
+              "toggle_plan_goal",
+              [el.dataset.u],
+              ev.currentTarget.dataset.off ? "Taken off the plan" : "The plan now builds toward this goal too",
             );
         });
       }
