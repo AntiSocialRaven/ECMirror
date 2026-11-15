@@ -10546,11 +10546,24 @@ def asset_manifest():
 
 def start_hub(api, port=8977):
     """Tiny HTTP server on the LAN so the other devices - a second computer, a phone - can sync with this one.
-    Every request needs the pairing code; repeated wrong codes lock that address out for a minute."""
+    Every request needs the pairing code; five different wrong codes lock that address out for a minute."""
     import hmac
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-    fails = {}
+    fails = {}  # ip -> (the distinct wrong codes tried, locked until)
+
+    def locked(ip):
+        return time.time() < fails.get(ip, (set(), 0))[1]
+
+    def wrong(ip, attempt):
+        """Five *different* wrong codes from one address lock it out for a minute. The same wrong code over and over
+        is one guess, not an attack: a phone still paired with another PC offers that PC's code to every hub it
+        finds, and counting each probe locked it out of the hub whose code it later had right."""
+        tried, until = fails.get(ip, (set(), 0))
+        if until and time.time() >= until:
+            tried, until = set(), 0
+        tried = tried | {attempt[:64]}
+        fails[ip] = (tried, time.time() + 60 if len(tried) >= 5 else 0)
 
     class Hub(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -10568,16 +10581,14 @@ def start_hub(api, port=8977):
 
         def _authorised(self):
             ip = self.client_address[0]
-            count, until = fails.get(ip, (0, 0))
-            if time.time() < until:
-                self._send(429, dict(error="Too many wrong codes. Wait a minute."))
+            if locked(ip):
+                self._send(429, dict(error="Too many different wrong codes. Wait a minute."))
                 return False
             given = (self.headers.get("X-Sync-Code") or "").upper().replace("-", "")
             if P["hub_code"] and hmac.compare_digest(given, P["hub_code"].replace("-", "")):
                 fails.pop(ip, None)
                 return True
-            count += 1
-            fails[ip] = (count, time.time() + 60 if count >= 5 else 0)
+            wrong(ip, given)
             self._send(401, dict(error="Wrong pairing code"))
             return False
 
@@ -10597,12 +10608,11 @@ def start_hub(api, port=8977):
             route = self.path.split("?")[0]
             if route == "/plan.ics":  # a calendar app can't send the pairing header, so this link carries its own key
                 ip = self.client_address[0]
-                count, until = fails.get(ip, (0, 0))
                 key = (self.path.partition("?k=")[2] or "").split("&")[0]
-                if time.time() < until:
-                    return self._send(429, dict(error="Too many wrong keys. Wait a minute."))
+                if locked(ip):
+                    return self._send(429, dict(error="Too many different wrong keys. Wait a minute."))
                 if not P.get("ics_token") or not hmac.compare_digest(key, P["ics_token"]):
-                    fails[ip] = (count + 1, time.time() + 60 if count + 1 >= 5 else 0)
+                    wrong(ip, key)
                     return self._send(401, dict(error="Wrong key"))
                 self.send_response(200)
                 body = api.export_ics_text().encode()
