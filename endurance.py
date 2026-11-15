@@ -2,8 +2,9 @@
 
 Run:        python endurance.py
 Self-test:  python endurance.py --selftest
-Build EXE:  build.ps1
-Data lives in %APPDATA%/EnduranceCoach/data.db, backed up to backups/ on every launch.
+Build EXE:  build.ps1 (Windows) or build.sh (Linux)
+Data lives in %APPDATA%/EnduranceCoach/data.db on Windows and ~/.local/share/EnduranceCoach/data.db on Linux,
+backed up to backups/ on every launch.
 """
 
 import csv
@@ -18,6 +19,7 @@ import secrets
 import shutil
 import sqlite3
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -30,7 +32,15 @@ import xml.etree.ElementTree as ET
 
 APP = "Endurance Coach"
 
-DATA_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "EnduranceCoach")
+def _data_root():
+    if os.environ.get("APPDATA"):
+        return os.environ["APPDATA"]
+    if sys.platform.startswith("linux"):
+        return os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
+    return os.path.expanduser("~")
+
+
+DATA_DIR = os.path.join(_data_root(), "EnduranceCoach")
 
 DB_PATH = os.path.join(DATA_DIR, "data.db")
 
@@ -119,6 +129,7 @@ STRAVA_DATE_FORMATS = (
 SPORT_FAMILY = {"Brick": "Bike"}
 
 # Apple Health workout types -> app sports. `transition` (triathlon T1/T2) is skipped; unknown types become Other.
+HEALTH_COLS = ("rhr", "hrv", "sleep_h", "weight_kg")  # wellness fields an Apple Health import can fill
 HEALTH_SPORTS = {
     **dict.fromkeys(["running", "runningTreadmill", "trackAndField", "wheelchairRunPace"], "Run"),
     **dict.fromkeys(["cycling", "bikingStationary", "handCycling"], "Bike"),
@@ -247,6 +258,7 @@ LOCAL_KEYS = {
     "sync_remote_rev",
     "sync_pushed_rev",
     "sync_last",
+    "sync_peers",
     "hub_on",
     "ics_token",
     "hub_code",
@@ -322,7 +334,7 @@ UPDATE_REPO = "AntiSocialRaven/ECMirror"
 
 RELEASES_API = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
 
-ASSET_NAME = "EnduranceCoach.exe"
+ASSET_NAME = "EnduranceCoach-linux" if sys.platform.startswith("linux") else "EnduranceCoach.exe"
 
 
 # ============================================================================
@@ -420,6 +432,7 @@ DEFAULTS = dict(
     sync_remote_rev=0,
     sync_pushed_rev=0,
     sync_last="",
+    sync_peers=[],
     hub_on=False,
     ics_token="",
     hub_code="",
@@ -1402,7 +1415,7 @@ PROFILE_META = {
         ("select", [("low", "Low (well tolerated)"), ("normal", "Normal"), ("high", "High (gets jittery easily)")]),
         "Sets where in the 3–6 mg/kg range race-day dosing sits",
     ),
-    "theme": ("Theme", ("select", [("system", "Match Windows"), ("light", "Light"), ("dark", "Dark")]), ""),
+    "theme": ("Theme", ("select", [("system", "Match system"), ("light", "Light"), ("dark", "Dark")]), ""),
     "map_tiles": (
         "Street maps under routes",
         "bool",
@@ -5569,6 +5582,8 @@ def open_db(path=DB_PATH):
     for col in ("fatigue", "mood"):
         if col not in have:
             db.execute(f"ALTER TABLE wellness ADD COLUMN {col} INTEGER")
+    if "hsrc" not in have:  # which of HEALTH_COLS were last written by a Health import (vs typed in)
+        db.execute("ALTER TABLE wellness ADD COLUMN hsrc TEXT")
     for col, typ in (
         ("wx_temp", "REAL"),
         ("wx_dew", "REAL"),
@@ -5642,28 +5657,37 @@ def add_sync_columns(db):
         db.execute(f"UPDATE {t} SET updated=NULL WHERE updated IS NULL{' OR uid IS NULL' if key == 'uid' else ''}")
 
 
-def collect_changes(db, since):
-    """Everything this database changed after rev `since`, in a device-independent form."""
+def in_ranges(rev, ranges):
+    return any(lo < rev <= hi for lo, hi in ranges)
+
+
+def collect_changes(db, since, skip=()):
+    """Everything this database changed after rev `since`, in a device-independent form. `skip` holds rev ranges
+    (lo, hi] of what that peer itself handed over, so a change is never sent back to where it came from."""
+    cut = "".join(f" AND NOT (rev > {int(lo)} AND rev <= {int(hi)})" for lo, hi in skip)
     rows = {}
     for t in SYNC_TABLES:
         rows[t] = [
             {k: v for k, v in dict(r).items() if k not in ("id", "rev")}
-            for r in db.execute(f"SELECT * FROM {t} WHERE rev > ?", (since,))
+            for r in db.execute(f"SELECT * FROM {t} WHERE rev > ?{cut}", (since,))
         ]
     tombs = [
         dict(tbl=r["tbl"], key=r["key"], updated=r["updated"])
-        for r in db.execute("SELECT * FROM tombstones WHERE rev > ?", (since,))
+        for r in db.execute(f"SELECT * FROM tombstones WHERE rev > ?{cut}", (since,))
     ]
     profile = None
-    if int(kv_get(db, "profile_rev", 0)) > since:
+    prev = int(kv_get(db, "profile_rev", 0))
+    if prev > since and not in_ranges(prev, skip):
         data = {k: v for k, v in json.loads(kv_get(db, "profile", "{}")).items() if k not in LOCAL_KEYS}
         profile = dict(data=data, updated=int(kv_get(db, "profile_updated", 0)))
     return dict(rows=rows, tombstones=tombs, profile=profile, rev=current_rev(db))
 
 
-def apply_changes(db, ch, hub):
-    """Merge another device's changes, last writer wins per row. The hub gives merged rows a fresh rev so other
-    devices receive them; a phone stores them with rev 0 so they aren't echoed back.
+def apply_changes(db, ch, hub, prefer=None):
+    """Merge another device's changes. By default the later edit wins per row. A phone is the authority when it
+    syncs with a PC: prefer="incoming" is the hub taking a phone's changes, which win unless they are the same edit
+    coming back around. The hub does this before it replies, so the phone never has to defend its own rows.
+    A hub gives merged rows a fresh rev so other devices receive them.
     ponytail: wall-clock timestamps and whole-profile merges; switch to hybrid logical clocks / per-field profile merge
     if devices with badly wrong clocks or simultaneous settings edits become a real problem."""
     n = 0
@@ -5680,7 +5704,10 @@ def apply_changes(db, ch, hub):
                     continue
                 tomb = db.execute("SELECT updated FROM tombstones WHERE tbl=? AND key=?", (t, r[key])).fetchone()
                 local = db.execute(f"SELECT updated FROM {t} WHERE {key}=?", (r[key],)).fetchone()
-                if (tomb and tomb[0] >= r["updated"]) or (local and (local[0] or 0) >= r["updated"]):
+                if prefer == "incoming":
+                    if local and local[0] == r["updated"]:
+                        continue  # the same edit coming back around
+                elif (tomb and tomb[0] >= r["updated"]) or (local and (local[0] or 0) >= r["updated"]):
                     continue
                 r["rev"] = bump_rev(db) if hub else 0
                 names = ",".join(f'"{c}"' for c in r)
@@ -5697,9 +5724,11 @@ def apply_changes(db, ch, hub):
                 continue
             key = SYNC_TABLES[t]
             local = db.execute(f"SELECT updated FROM {t} WHERE {key}=?", (tb["key"],)).fetchone()
-            mine = db.execute("SELECT updated FROM tombstones WHERE tbl=? AND key=?", (t, tb["key"])).fetchone()
-            if (local and (local[0] or 0) > tb["updated"]) or (mine and mine[0] >= tb["updated"]):
-                continue  # edited after the delete (edit wins), or already deleted
+            gone = db.execute("SELECT updated FROM tombstones WHERE tbl=? AND key=?", (t, tb["key"])).fetchone()
+            if gone and gone[0] >= tb["updated"]:
+                continue  # already deleted
+            if prefer != "incoming" and local and (local[0] or 0) > tb["updated"]:
+                continue  # edited after the delete: the edit wins
             db.execute(f"DELETE FROM {t} WHERE {key}=?", (tb["key"],))
             db.execute(
                 "INSERT OR REPLACE INTO tombstones VALUES(?,?,?,?)",
@@ -5707,13 +5736,16 @@ def apply_changes(db, ch, hub):
             )
             n += local is not None
         pr = ch.get("profile")
-        if pr and pr.get("updated", 0) > int(kv_get(db, "profile_updated", 0)):
-            mine = json.loads(kv_get(db, "profile", "{}"))
-            merged = {**pr["data"], **{k: v for k, v in mine.items() if k in LOCAL_KEYS}}
-            db.execute("INSERT OR REPLACE INTO kv VALUES('profile', ?)", (json.dumps(merged),))
-            db.execute("INSERT OR REPLACE INTO kv VALUES('profile_updated', ?)", (str(pr["updated"]),))
-            db.execute("INSERT OR REPLACE INTO kv VALUES('profile_rev', ?)", (str(bump_rev(db) if hub else 0),))
-            n += 1
+        if pr:
+            have = int(kv_get(db, "profile_updated", 0))
+            take = pr.get("updated", 0) != have if prefer == "incoming" else pr.get("updated", 0) > have
+            if take:
+                mine = json.loads(kv_get(db, "profile", "{}"))
+                merged = {**pr["data"], **{k: v for k, v in mine.items() if k in LOCAL_KEYS}}
+                db.execute("INSERT OR REPLACE INTO kv VALUES('profile', ?)", (json.dumps(merged),))
+                db.execute("INSERT OR REPLACE INTO kv VALUES('profile_updated', ?)", (str(pr["updated"]),))
+                db.execute("INSERT OR REPLACE INTO kv VALUES('profile_rev', ?)", (str(bump_rev(db) if hub else 0),))
+                n += 1
     finally:
         db.execute("DELETE FROM kv WHERE k='applying'")
     db.commit()
@@ -5807,6 +5839,21 @@ def load_profile(db):
         for k in stored.get("checklist", [])
     ]
     P.update({k: v for k, v in stored.items() if k in DEFAULTS})
+    if P["sync_code"]:  # the single PC an earlier version paired with becomes the first of several
+        P["sync_peers"] = [
+            dict(
+                id=secrets.token_hex(4),
+                name="",
+                host=P["sync_host"],
+                code=P["sync_code"],
+                remote_rev=P["sync_remote_rev"],
+                pushed_rev=P["sync_pushed_rev"],
+                last=P["sync_last"],
+                echo=[],
+            ),
+            *P["sync_peers"],
+        ]
+        P.update(sync_host="", sync_code="", sync_remote_rev=0, sync_pushed_rev=0, sync_last="")
     this_device(P)  # mint this install's id once, here, so the save below is what persists it
     # a profile saved before sync existed counts as edited now, so a brand-new phone never overrides it.
     # A fresh default profile is never an edit: it gets rev 0 on first save and only real edits stamp it.
@@ -6312,9 +6359,10 @@ class Api:
             plan_start=P["plan_start"],
             today=today.isoformat(),
             setup_done=P.get("setup_done", False),
-            paired=bool(P["sync_host"]),
-            sync_host=P["sync_host"],
-            sync_last=P["sync_last"],
+            paired=any(p["code"] for p in P["sync_peers"]),
+            sync_host=next((p["host"] for p in P["sync_peers"] if p["code"]), ""),
+            sync_last=max((p["last"] for p in P["sync_peers"] if p["code"]), default=""),
+            peers=self._peer_view(),
             loc=dict(place=P["home_place"], lat=P["home_lat"], lon=P["home_lon"]) if P["home_place"] else None,
         )
 
@@ -8702,9 +8750,13 @@ class Api:
         except ValueError as e:
             return dict(ok=False, error=str(e))
         latest = max([r["date"] for r in self._wellness()] + [""])
+        old = self._db.execute("SELECT * FROM wellness WHERE date=?", (v["date"],)).fetchone()
+        # saving the check-in re-submits whatever the form showed; a Health value left unchanged stays Health's
+        same = lambda c: old[c] is not None and v[c] is not None and abs(old[c] - v[c]) < 0.05
+        keep = [c for c in (old["hsrc"] or "").split(",") if c in HEALTH_COLS and same(c)] if old else []
         self._db.execute(
-            f"INSERT OR REPLACE INTO wellness({','.join(kinds)}) VALUES({','.join('?' * len(kinds))})",
-            tuple(v[k] for k in kinds),
+            f"INSERT OR REPLACE INTO wellness({','.join(kinds)}, hsrc) VALUES({','.join('?' * (len(kinds) + 1))})",
+            (*(v[k] for k in kinds), ",".join(keep) or None),
         )
         self._db.commit()
         if v["weight_kg"] and v["date"] >= latest:
@@ -9067,81 +9119,152 @@ class Api:
             ],
         )
 
-    # ---- sync: phone side
+    # ---- sync: client side. A device can pair with any number of hubs ("peers"), each with its own progress.
+    def _peer(self, pid=None):
+        """A paired hub by id, or the first one. A device that never paired gets an empty placeholder so a sync
+        driver can still run against it, as the engine's own tests do."""
+        if not P["sync_peers"]:
+            blank = dict(name="", host="", code="", remote_rev=0, pushed_rev=0, last="", echo=[])
+            P["sync_peers"] = [dict(id=secrets.token_hex(4), **blank)]
+        return next((p for p in P["sync_peers"] if p["id"] == pid), None) if pid else P["sync_peers"][0]
+
+    def _peer_view(self):
+        return [dict(id=p["id"], name=p["name"], host=p["host"], last=p["last"]) for p in P["sync_peers"] if p["code"]]
+
     @_locked
-    def sync_request(self):
-        """What the phone sends to the desktop hub. `mark` is confirmed with sync_response once the hub accepted it."""
+    def sync_peers(self):
+        return dict(peers=self._peer_view())
+
+    @_locked
+    def sync_request(self, peer=None):
+        """What this device sends to a hub. `mark` is confirmed with sync_response once the hub accepted it."""
+        pr = self._peer(peer)
+        if not pr:
+            return dict(peer=None, host="", code="", mark=current_rev(self._db), body=None)
+        skip = [tuple(e) for e in pr["echo"]]
         return dict(
-            host=P["sync_host"],
-            code=P["sync_code"],
+            peer=pr["id"],
+            host=pr["host"],
+            code=pr["code"],
             mark=current_rev(self._db),
             body=dict(
-                since=P["sync_remote_rev"],
+                since=pr["remote_rev"],
                 device=this_device(P),
-                changes=collect_changes(self._db, P["sync_pushed_rev"]),
+                changes=collect_changes(self._db, pr["pushed_rev"], skip),
             ),
         )
 
     @_locked
-    def sync_response(self, resp, mark):
-        # a device that is itself a hub re-stamps what it receives so its own clients get it too; the echo back
-        # to the upstream hub is harmless, last-writer-wins drops it on arrival
-        n = apply_changes(self._db, resp["changes"], hub=bool(self._hub))
+    def sync_response(self, resp, mark, peer=None):
+        pr = self._peer(peer)
+        if not pr:
+            return dict(ok=False, error="That PC isn't paired any more.")
+        pid = pr["id"]
+        before = current_rev(self._db)
+        # what arrives is stamped with fresh revs so the other paired PCs get it too, and those revs are noted as
+        # this peer's own so they are never sent back to it
+        n = apply_changes(self._db, resp["changes"], hub=True)
+        after = current_rev(self._db)
+        mine = dict(pr)
         load_profile(self._db)
-        P.update(
-            sync_remote_rev=resp["changes"]["rev"],
-            sync_pushed_rev=int(mark),
-            sync_last=dt.datetime.now().isoformat(timespec="seconds"),
+        pr = self._peer(pid)  # load_profile rebuilt the list; an unsaved placeholder is not in it
+        if pr is None:
+            pr = mine
+            P["sync_peers"] = [*P["sync_peers"], pr]
+        pr.update(
+            name=(resp.get("device") or {}).get("name") or pr["name"],
+            remote_rev=resp["changes"]["rev"],
+            pushed_rev=int(mark),
+            last=dt.datetime.now().isoformat(timespec="seconds"),
+            echo=[[before, after]] if after > before else [],
         )
         save_profile(self._db, touch=False)
-        return dict(ok=True, received=n, sent=resp.get("received", 0), hub=resp.get("name", ""))
+        return dict(ok=True, received=n, sent=resp.get("received", 0), hub=pr["name"] or resp.get("name", ""))
 
     @_locked
-    def sync_pair(self, host, code):
-        P.update(
-            sync_host=(host or "").strip(), sync_code=(code or "").strip().upper(), sync_remote_rev=0, sync_pushed_rev=0
-        )
+    def sync_pair(self, host, code, name=""):
+        """Pair with a hub. The same address again re-pairs it (new code, start over); a new one is added."""
+        host, code = (host or "").strip(), (code or "").strip().upper()
+        peers = P["sync_peers"]
+        same = next((p for p in peers if host and p["host"] == host), None)
+        old = same or next((p for p in peers if not p["code"]), None)
+        fresh = dict(name=(name or "").strip()[:40] or (old["name"] if old else ""), host=host, code=code)
+        fresh.update(remote_rev=0, pushed_rev=0, last="", echo=[])
+        pid = old["id"] if old else secrets.token_hex(4)
+        kept = [dict(p, **fresh) if p is old else p for p in peers]
+        P["sync_peers"] = kept if old else [*kept, dict(id=pid, **fresh)]
         save_profile(self._db, touch=False)
-        return dict(ok=True)
+        return dict(ok=True, peer=pid)
 
     @_locked
-    def sync_set_host(self, host):
+    def sync_set_host(self, host, peer=None):
         """The PC moved to a new address (found by discovery): keep sync progress, just update where it lives."""
-        P["sync_host"] = (host or "").strip()
-        save_profile(self._db, touch=False)
+        pr = self._peer(peer)
+        if pr:
+            pr["host"] = (host or "").strip()
+            save_profile(self._db, touch=False)
         return dict(ok=True)
 
     @_locked
-    def sync_unpair(self):
-        P.update(sync_host="", sync_code="", sync_remote_rev=0, sync_pushed_rev=0, sync_last="")
+    def sync_unpair(self, peer=None):
+        """Leave one PC, or all of them. Whatever already synced stays here."""
+        P["sync_peers"] = [p for p in P["sync_peers"] if peer and p["id"] != peer]
         save_profile(self._db, touch=False)
         return dict(ok=True)
 
-    def sync_now(self):
-        """One sync against the hub this device is paired with. The phone overrides this with its own driver in
+    def sync_now(self, peer=None):
+        """Sync with one paired hub, or with every one of them. The phone overrides this with its own driver in
         bridge.js (native HTTP); this is the computer's, so a laptop pairs exactly the way a phone does.
-        Deliberately not @_locked: it blocks on the network, and the pieces it calls take the lock themselves."""
-        req = self.sync_request()
+        With several hubs, what one hands over still has to reach the others, so after a first pass that received
+        anything the hubs that answered get a second one. Deliberately not @_locked: it blocks on the network, and
+        the pieces it calls take the lock themselves."""
+        ids = [peer] if peer else [p["id"] for p in P["sync_peers"] if p["code"]]
+        if not ids:
+            return dict(ok=False, error="This device isn't paired with another one yet.")
+        results, got, sent = {}, 0, 0
+        for i in ids:
+            results[i] = self._sync_one(i, budget=30 if len(ids) == 1 else 8)
+            got, sent = got + results[i].get("received", 0), sent + results[i].get("sent", 0)
+        if len(ids) > 1 and got:
+            for i in [i for i in ids if results[i]["ok"]]:
+                again = self._sync_one(i, budget=8)
+                got, sent = got + again.get("received", 0), sent + again.get("sent", 0)
+                results[i] = dict(again, moved=results[i].get("moved") or again.get("moved"))
+        if len(ids) == 1:
+            return results[ids[0]]
+        label = {p["id"]: p["name"] or p["host"] for p in P["sync_peers"]}
+        bad = [f"{label.get(i, i)}: {results[i]['error']}" for i in ids if not results[i]["ok"]]
+        return dict(
+            ok=not bad,
+            received=got,
+            sent=sent,
+            moved=next((r["moved"] for r in results.values() if r.get("moved")), None),
+            results=[dict(results[i], peer=i) for i in ids],
+            error="; ".join(bad),
+        )
+
+    def _sync_one(self, pid, budget=30):
+        req = self.sync_request(pid)
         if not req["code"]:
             return dict(ok=False, error="This device isn't paired with another one yet.")
         host = req["host"] and (req["host"] if ":" in req["host"] else f"{req['host']}:{SYNC_PORTS[0]}")
         status, data = post_sync(host, req["code"], req["body"]) if host else (None, {})
         moved = None
         if status is None:
-            moved = host = discover_hub(host, req["code"])
+            moved = host = discover_hub(host, req["code"], budget=budget)
             if not host:
                 return dict(
                     ok=False,
                     error="Couldn't find that device on this network. Check both are on the same "
                     "Wi-Fi, the other one is open with Device sync on, and its firewall allows it.",
                 )
-            self.sync_set_host(host)
+            self.sync_set_host(host, pid)
             status, data = post_sync(host, req["code"], req["body"])
             if status is None:
                 return dict(ok=False, error=f"Found it at {host} but the sync didn't finish. Try again.")
         if status != 200:
             return dict(ok=False, error=data.get("error") or f"The other device replied {status}")
-        return dict(**self.sync_response(data, req["mark"]), moved=moved)
+        return dict(**self.sync_response(data, req["mark"], pid), moved=moved)
 
     def find_hubs(self):
         """Devices advertising a hub on this network right now. The pairing screen lists these by name so
@@ -9168,11 +9291,13 @@ class Api:
         seen = json.loads(kv_get(self._db, "devices", "{}"))
         me = this_device(P)
         save_profile(self._db, touch=False)
+        peers = self._peer_view()
         return dict(
             me=me,
-            paired=bool(P["sync_host"]),
-            host=P["sync_host"],
-            last=P["sync_last"],
+            paired=bool(peers),
+            host=peers[0]["host"] if peers else "",
+            last=max((p["last"] for p in peers), default=""),
+            peers=peers,
             list=sorted((dict(id=k, **v) for k, v in seen.items()), key=lambda d: d["last"], reverse=True),
         )
 
@@ -9194,13 +9319,18 @@ class Api:
     def hub_exchange(self, body):
         """Handle one phone sync: merge its changes, return ours since its last sync."""
         with self._lock:
-            n = apply_changes(self._db, body.get("changes") or {}, hub=True)
+            # a phone is the authority: where its change and ours collide, its version is the one kept
+            prefer = "incoming" if (body.get("device") or {}).get("kind") == "phone" else None
+            before = current_rev(self._db)
+            n = apply_changes(self._db, body.get("changes") or {}, hub=True, prefer=prefer)
+            after = current_rev(self._db)
             if n:
                 load_profile(self._db)
             P["hub_last"] = dt.datetime.now().isoformat(timespec="seconds")
             self._seen_device(body.get("device"))
             save_profile(self._db, touch=False)
-            out = dict(changes=collect_changes(self._db, int(body.get("since") or 0)), received=n, name=P["name"])
+            back = collect_changes(self._db, int(body.get("since") or 0), [(before, after)] if after > before else [])
+            out = dict(changes=back, received=n, name=P["name"], device=this_device(P))
         if n and self._window:
             self._window.evaluate_js(f"window.onSynced && onSynced({n})")
         return out
@@ -9222,6 +9352,7 @@ class Api:
             me=d["me"],
             devices=d["list"],
             paired=d["paired"],
+            peers=d["peers"],
             host=d["host"],
             synced=d["last"],
             can_relay=not IS_PHONE,
@@ -9751,20 +9882,28 @@ class Api:
         acts, daily = health_to_data(workouts or [], samples or [])
         added, dups = self._import_activities(acts)
         days = 0
-        cols = ("rhr", "hrv", "sleep_h", "weight_kg")
+        cols = HEALTH_COLS
         for d, vals in sorted(daily.items()):
             row = self._db.execute("SELECT * FROM wellness WHERE date=?", (d,)).fetchone()
             if not row:
                 self._db.execute(
-                    "INSERT INTO wellness(date, rhr, hrv, sleep_h, weight_kg) VALUES(?,?,?,?,?)",
-                    (d, *(vals[c] for c in cols)),
+                    "INSERT INTO wellness(date, rhr, hrv, sleep_h, weight_kg, hsrc) VALUES(?,?,?,?,?,?)",
+                    (d, *(vals[c] for c in cols), ",".join(c for c in cols if vals[c] is not None)),
                 )
                 days += 1
-            else:  # only fill what the athlete left blank; typed-in values always win
-                fill = {c: vals[c] for c in cols if row[c] is None and vals[c] is not None}
+            else:
+                # blanks are filled; a value Health wrote earlier is refreshed (the Watch is still adding to last
+                # night's sleep at 6 am); a value the athlete typed always wins
+                mine = {c for c in (row["hsrc"] or "").split(",") if c}
+                fill = {
+                    c: vals[c]
+                    for c in cols
+                    if vals[c] is not None and (row[c] is None or (c in mine and row[c] != vals[c]))
+                }
                 if fill:
                     self._db.execute(
-                        f"UPDATE wellness SET {', '.join(f'{c}=?' for c in fill)} WHERE date=?", (*fill.values(), d)
+                        f"UPDATE wellness SET {', '.join(f'{c}=?' for c in fill)}, hsrc=? WHERE date=?",
+                        (*fill.values(), ",".join(sorted(mine | set(fill))), d),
                     )
                     days += 1
         latest = self._db.execute(
@@ -10133,7 +10272,11 @@ class Api:
         )
 
     def open_data_folder(self):
-        os.startfile(os.path.dirname(self._path))
+        folder = os.path.dirname(self._path)
+        if hasattr(os, "startfile"):
+            os.startfile(folder)
+        else:
+            subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", folder])
 
     def export_all(self):
         path = self._save_dialog(f"endurance-coach-{dt.date.today()}.json", ("JSON (*.json)",))
@@ -10599,6 +10742,7 @@ def install_update(url, expect_size=None, timeout=300):
         return dict(ok=False, error="The download was incomplete. Nothing has been changed.")
     old = f"{exe}.old-{int(time.time())}"
     try:
+        os.chmod(fresh, 0o755)  # downloads are not executable
         os.replace(exe, old)  # renaming a running exe is allowed on Windows; overwriting it is not
         os.replace(fresh, exe)
     except OSError as e:
@@ -10621,15 +10765,26 @@ def resource(name):
 
 
 def dark_theme():
-    """Resolve the theme setting; 'system' follows the Windows app theme."""
+    """Resolve the theme setting; 'system' follows the OS app theme."""
     if P.get("theme") in ("light", "dark"):
         return P["theme"] == "dark"
+    if sys.platform.startswith("linux"):
+        try:
+            out = subprocess.run(
+                ["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return "dark" in out
     try:
         import winreg
 
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
         return winreg.QueryValueEx(key, "AppsUseLightTheme")[0] == 0
-    except OSError:
+    except (ImportError, OSError):
         return False
 
 

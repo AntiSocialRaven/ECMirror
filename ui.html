@@ -4586,6 +4586,25 @@
         overflow: hidden;
         text-overflow: ellipsis;
       }
+      /* a paired PC: the buttons drop under the address when the card is too narrow for both */
+      .devlist > .peer {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 10px;
+      }
+      .devlist .peer-main {
+        flex: 1 1 150px;
+        min-width: 0;
+      }
+      .devlist .peer-main .addr {
+        font-size: 13px;
+        overflow-wrap: anywhere;
+      }
+      .devlist .peer-btns {
+        display: flex;
+        gap: 6px;
+        margin-left: auto;
+      }
       html.mobile .devsplit {
         grid-template-columns: 1fr;
       }
@@ -6892,7 +6911,9 @@
       // dashboard: a chart point or bar opens what is behind it; the range chips widen both charts
       let PLAN_FOCUS = null;
       function planFocus(d) {
-        const i = PLAN_FOCUS && d.weeks.findIndex((w) => w.days.some((x) => x.date === PLAN_FOCUS));
+        // not `PLAN_FOCUS && findIndex(...)`: that is null when nothing is focused, and null >= 0 is true, so
+        // every render of the plan page snapped back to the current week and the arrows and week bar did nothing
+        const i = PLAN_FOCUS ? d.weeks.findIndex((w) => w.days.some((x) => x.date === PLAN_FOCUS)) : -1;
         PLAN_FOCUS = null;
         if (i >= 0) WEEK = i;
       }
@@ -12900,7 +12921,7 @@
       ${field(
         "Theme",
         seg("theme", [
-          ["system", "Match Windows"],
+          ["system", "Match system"],
           ["light", "Light"],
           ["dark", "Dark"],
         ]),
@@ -13370,7 +13391,8 @@
         <div class="devhalf">
           <div class="row" style="justify-content:space-between"><b>Host the sync here</b>
             <label class="switch"><input type="checkbox" id="hubOn" ${h.on ? "checked" : ""}><b></b><span class="small muted">${h.on ? "On" : "Off"}</span></label></div>
-          <p class="small muted" style="margin:6px 0 0">One device hosts; every other device joins it. Pick the PC that is on most &mdash; usually the desktop.</p>
+          <p class="small muted" style="margin:6px 0 0">One device hosts; every other device joins it. Pick the PC that is on most &mdash; usually the desktop.
+            Your phone is the main copy: where it and a PC changed the same thing, the phone's version is kept.</p>
           ${
             h.on
               ? `<div class="devjoin">
@@ -13407,13 +13429,10 @@
         </div>
         <div class="devhalf">
           <b>Join another device</b>
-          <p class="small muted" style="margin:6px 0 0">Use this on your second PC so it syncs to the one hosting.</p>
+          <p class="small muted" style="margin:6px 0 0">Use this on a second PC so it syncs to the one hosting. A PC can join as many as you like.</p>
           ${
-            h.paired
-              ? `<div style="margin-top:10px"><div class="small muted">Joined to</div><div class="addr">${esc(h.host || "found automatically")}</div>
-              <div class="small muted" style="margin-top:4px">${h.synced ? "Last synced " + when(h.synced) : "Not synced yet"}</div>
-              <div class="row wrap" style="margin-top:10px"><button type="button" class="btn primary" id="syncGo">${I("refresh")}Sync now</button>
-                <button type="button" class="btn" id="unjoin">Leave</button></div></div>`
+            h.peers.length
+              ? peerList(h.peers)
               : `<button type="button" class="btn" style="margin-top:10px" onclick="openPair()">${I("wifi")}Join another device</button>`
           }
           ${
@@ -13461,15 +13480,7 @@
             drawHub();
           };
         $("#devRename").onclick = () => renameDevice(h.me.name);
-        if ($("#syncGo")) $("#syncGo").onclick = () => syncTap();
-        if ($("#unjoin"))
-          $("#unjoin").onclick = async () => {
-            await call("sync_unpair");
-            BOOT = await call("boot");
-            shell();
-            drawHub();
-            toast("Left the other device", "Everything already synced stays here.", "info");
-          };
+        wirePeers(drawHub);
         $$("[data-forget]").forEach(
           (b) =>
             (b.onclick = async () => {
@@ -13504,24 +13515,15 @@
         // phone: pairing state and what this phone calls itself
         const me = (await call("devices")).me;
         $("#syncCard").innerHTML =
-          `<div class="card-h"><div><h3>${I("wifi")} Sync with your PC</h3><div class="sub">Syncs over home Wi-Fi with the Endurance Coach desktop app.</div></div>
+          `<div class="card-h"><div><h3>${I("wifi")} Sync with your PCs</h3><div class="sub">Syncs over home Wi-Fi with the Endurance Coach desktop app, on as many PCs as you like. Your phone is the main copy: where it and a PC changed the same thing, the phone's version is kept.</div></div>
       <button type="button" class="btn sm" id="devRename">${I("edit")}${esc(me.name)}</button></div>
     <div class="card-b">${
-      BOOT.paired
-        ? `<div class="row wrap"><div class="grow"><div class="small muted">Paired with</div><div class="addr">${esc(BOOT.sync_host)}</div>
-        <div class="small muted">${BOOT.sync_last ? "Last synced " + new Date(BOOT.sync_last).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "Not synced yet"}</div></div>
-        <button type="button" class="btn primary" onclick="syncTap()">${I("refresh")}Sync now</button><button type="button" class="btn" id="unpair">Unpair</button></div>`
+      BOOT.peers.length
+        ? peerList(BOOT.peers)
         : `<p class="muted" style="margin:0 0 12px">Pair once and your workouts, races, check-ins and settings stay in step with your PC.</p><button type="button" class="btn primary" onclick="openPair()">${I("wifi")}Pair with PC</button>`
     }</div>`;
         $("#devRename").onclick = () => renameDevice(me.name);
-        if ($("#unpair"))
-          $("#unpair").onclick = async () => {
-            await call("sync_unpair");
-            BOOT = await call("boot");
-            shell();
-            drawPhoneSync();
-            toast("Unpaired", "Your data stays on this phone.", "info");
-          };
+        wirePeers(drawPhoneSync);
       }
       // Where this phone's screens and engine come from. The loader has already decided by the time anything here
       // runs, so this reports that decision and changes it for next launch - nothing swaps under a running app.
@@ -13660,19 +13662,54 @@
           toast(r.copied ? "Copied to clipboard" : "Shared");
         };
       }
+      // every PC this device is paired with, each with its own Sync and Leave; shared by the desktop and phone cards
+      function peerList(peers) {
+        const fmt = (t) =>
+          new Date(t).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+        return `<div class="devlist" style="margin-top:10px">${peers
+          .map(
+            (p) => `<div class="peer"><span class="ic">${I("folder")}</span>
+          <span class="peer-main"><b>${esc(p.name || "PC")}</b><br><span class="addr">${esc(p.host || "found automatically")}</span><br>
+            <span class="muted small">${p.last ? "Last synced " + fmt(p.last) : "Not synced yet"}</span></span>
+          <span class="peer-btns"><button type="button" class="btn sm" data-peer-sync="${esc(p.id)}">${I("refresh")}Sync</button>
+            <button type="button" class="btn sm" data-peer-leave="${esc(p.id)}">Leave</button></span></div>`,
+          )
+          .join("")}</div>
+        <div class="row wrap" style="margin-top:10px">
+          ${peers.length > 1 ? `<button type="button" class="btn primary" id="syncAll">${I("refresh")}Sync all</button>` : ""}
+          <button type="button" class="btn" onclick="openPair()">${I("wifi")}${MOBILE ? "Pair another PC" : "Join another device"}</button></div>`;
+      }
+      function wirePeers(redraw) {
+        $$("[data-peer-sync]").forEach((b) => (b.onclick = () => syncTap(b.dataset.peerSync)));
+        if ($("#syncAll")) $("#syncAll").onclick = () => syncTap();
+        $$("[data-peer-leave]").forEach(
+          (b) =>
+            (b.onclick = async () => {
+              await call("sync_unpair", b.dataset.peerLeave);
+              BOOT = await call("boot");
+              shell();
+              redraw();
+              toast("Left that device", "Everything already synced stays here.", "info");
+            }),
+        );
+      }
       let syncing = false;
-      async function syncTap() {
+      async function syncTap(peer) {
         if (syncing) return;
         syncing = true;
         $("#syncBtn").style.opacity = 0.5;
-        const r = await call("sync_now").finally(() => {
+        const r = await call("sync_now", peer).finally(() => {
           syncing = false;
           $("#syncBtn").style.opacity = 1;
         });
-        if (!r.ok) return toast("Sync failed", r.error, "bad");
+        // with several PCs one can be off while the others sync fine: say so, but still refresh what arrived
+        if (!r.ok && !(r.results || []).some((x) => x.ok)) return toast("Sync failed", r.error, "bad");
         toast(
-          MOBILE ? "Synced with your PC" : "Synced",
-          `${r.received} received, ${r.sent} sent` + (r.moved ? `\nFound it at its new address, ${r.moved}` : ""),
+          MOBILE ? (BOOT.peers.length > 1 && !peer ? "Synced with your PCs" : "Synced with your PC") : "Synced",
+          `${r.received} received, ${r.sent} sent` +
+            (r.moved ? `\nFound it at its new address, ${r.moved}` : "") +
+            (r.ok ? "" : `\nCouldn't reach: ${r.error}`),
+          r.ok ? undefined : "info",
         );
         BOOT = await call("boot");
         shell();
@@ -13691,14 +13728,15 @@
         <span class="help">Shown on the hosting device under Profile &amp; settings &rarr; Device sync.</span></label>
       <details class="manual" style="margin-top:14px"><summary class="small muted">Not listed? Enter an address instead</summary>
         <label class="field full" style="margin-top:10px"><span>Address</span>
-          <input name="host" inputmode="url" autocapitalize="off" placeholder="192.168.1.23:8977" value="${esc(BOOT.sync_host || "")}">
+          <input name="host" inputmode="url" autocapitalize="off" placeholder="192.168.1.23:8977">
           <span class="help">Only needed when the network blocks the discovery devices use to find each other.</span></label>
       </details>
       <div id="pairErr" class="flags" style="display:none;margin-top:14px"></div></form>
     <div class="modal-f"><button class="btn sm" id="rescan">${I("refresh")}Search again</button><span class="grow"></span>
       <button class="btn" data-close>Cancel</button><button class="btn primary" id="pairGo">${I("wifi")}Connect and sync</button></div>`);
         const f = $("#pairF");
-        let picked = null;
+        let picked = null,
+          found = {};
         const cancel = () => {
           closeModal();
           if (fromSetup && !BOOT.setup_done) openSetup();
@@ -13713,6 +13751,7 @@
           $("#hubList").innerHTML =
             `<div class="row small muted" style="padding:10px 0"><div class="spin sm"></div>Looking for devices on this network…</div>`;
           const { hubs } = await call("find_hubs");
+          found = Object.fromEntries(hubs.map((h) => [h.host, h.name]));
           picked = hubs.length === 1 ? hubs[0].host : null;
           $("#hubList").innerHTML = hubs.length
             ? `<div class="hublist">${hubs
@@ -13720,7 +13759,7 @@
                   (
                     h,
                   ) => `<label><input type="radio" name="hub" value="${esc(h.host)}" ${h.host === picked ? "checked" : ""}>
-          <span>${I("folder")}<b>${esc(h.name)}</b><em>${esc(h.host)}</em></span></label>`,
+          <span>${I("folder")}<b>${esc(h.name)}</b><em>${esc(h.host)}${BOOT.peers.some((p) => p.host === h.host) ? " &middot; already paired" : ""}</em></span></label>`,
                 )
                 .join("")}</div>`
             : `<div class="small muted" style="padding:8px 0">Nothing found yet. Make sure the other device has
@@ -13744,8 +13783,8 @@
           if (!code) return;
           $("#pairGo").textContent = host ? "Connecting…" : "Searching…";
           $("#pairGo").disabled = true;
-          await call("sync_pair", host, code);
-          const r = await call("sync_now");
+          const pair = await call("sync_pair", host, code, found[host] || "");
+          const r = await call("sync_now", pair.peer);
           $("#pairGo").disabled = false;
           $("#pairGo").innerHTML = `${I("wifi")}Connect and sync`;
           if (!r.ok) {
