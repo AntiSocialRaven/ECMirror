@@ -5691,21 +5691,24 @@ def in_ranges(rev, ranges):
 
 def collect_changes(db, since, skip=()):
     """Everything this database changed after rev `since`, in a device-independent form. `skip` holds rev ranges
-    (lo, hi] of what that peer itself handed over, so a change is never sent back to where it came from."""
+    (lo, hi] of what that peer itself handed over, so a change is never sent back to where it came from.
+    `since` 0 means a device it has never synced with, which gets everything: rows that arrived from another device
+    before relaying existed were stored with rev 0 (never stamped for sending), so a PC paired later never saw them."""
+    lo_rev = int(since) if since else -1
     cut = "".join(f" AND NOT (rev > {int(lo)} AND rev <= {int(hi)})" for lo, hi in skip)
     rows = {}
     for t in SYNC_TABLES:
         rows[t] = [
             {k: v for k, v in dict(r).items() if k not in ("id", "rev")}
-            for r in db.execute(f"SELECT * FROM {t} WHERE rev > ?{cut}", (since,))
+            for r in db.execute(f"SELECT * FROM {t} WHERE rev > ?{cut}", (lo_rev,))
         ]
     tombs = [
         dict(tbl=r["tbl"], key=r["key"], updated=r["updated"])
-        for r in db.execute(f"SELECT * FROM tombstones WHERE rev > ?{cut}", (since,))
+        for r in db.execute(f"SELECT * FROM tombstones WHERE rev > ?{cut}", (lo_rev,))
     ]
     profile = None
     prev = int(kv_get(db, "profile_rev", 0))
-    if prev > since and not in_ranges(prev, skip):
+    if (prev > since or not since) and not in_ranges(prev, skip):
         data = {k: v for k, v in json.loads(kv_get(db, "profile", "{}")).items() if k not in LOCAL_KEYS}
         profile = dict(data=data, updated=int(kv_get(db, "profile_updated", 0)))
     return dict(rows=rows, tombstones=tombs, profile=profile, rev=current_rev(db))
