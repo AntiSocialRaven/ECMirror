@@ -7593,7 +7593,7 @@
           tipfmt: (v) => (isPower ? `${v.toFixed(0)} W` : `${fmtPace(v)}${be.pace_unit}`),
         });
       }
-      const rankRows = () => [...RANKS.events, ...RANKS.multi, ...RANKS.off_bike];
+      const rankRows = () => [...RANKS.events, ...RANKS.multi, ...RANKS.off_bike, ...RANKS.thresholds];
       const sportChip = (s) =>
         `<div class="sportchip">${tierBadge(s, 30)}<div><b>${esc(s.sport)}</b><span>${esc(s.tier)}${s.div ? " " + s.div : ""} · ${s.score}</span></div></div>`;
 
@@ -7617,7 +7617,7 @@
       function thrRow(t) {
         // a score over 100 means "faster than the world record", which a measured race never is but a mistyped FTP or
         // a botched CSS test easily can be - so say so instead of handing out an Elite badge
-        return `<div class="pr none"><div class="hd">${sportIcon(t.sport)}<b>${esc(THR_NAME[t.sport] || t.sport)}</b></div>
+        return `<button class="pr" data-key="${t.sport}:thr" title="See the value each rank needs"><div class="hd">${sportIcon(t.sport)}<b>${esc(THR_NAME[t.sport] || t.sport)}</b></div>
     <div>${tierChip(t)}</div><div class="t">${esc(t.value)}</div>
     <div class="rt">${t.coggan ? esc(t.coggan) : ""}</div>${ladder(t)}
     <div class="sub">${esc(t.detail)}${
@@ -7625,7 +7625,7 @@
         ? ` &middot; <b style="color:var(--warn)">that is past
       world-record level &mdash; worth re-checking the number on Zones &amp; tests</b>`
         : ""
-    }</div></div>`;
+    }</div></button>`;
       }
 
       function stepsTable(e) {
@@ -7674,8 +7674,25 @@
         scrollToHere(m);
       }
 
+      function thrDetail(t) {
+        const m = modal(
+          `<div class="modal-h"><h3>${badge(t.sport)}${esc(THR_NAME[t.sport] || t.sport)}</h3><button class="icon-btn" data-close>${I("x")}</button></div>
+    <div class="modal-b">
+      <div class="rank-hero">${tierBadge(t, 64)}<div class="who">
+        <div class="tier">${esc(t.value)}</div><div class="cls">${esc(t.tier)}${t.div ? " " + t.div : ""}${t.coggan ? " · " + esc(t.coggan) : ""}</div></div></div>
+      ${ladder(t, "", 26)}
+      <div class="small muted" style="margin:10px 0">${esc(t.detail)}. What you can hold for an hour; each row is the value that just reaches that rank, for your age and sex.</div>
+      ${stepsTable(t)}
+    </div>
+    <div class="modal-f"><span class="grow"></span><button class="btn" data-close>Close</button></div>`,
+          { width: 600 },
+        );
+        scrollToHere(m);
+      }
+
       function prDetail(key) {
         const e = rankRows().find((x) => `${x.sport}:${x.key}` === key);
+        if (e.key === "thr") return thrDetail(e);
         if (!e.have) return prTargets(e);
         modal(
           `<div class="modal-h"><h3>${badge(e.sport)}${esc(e.label)}</h3><button class="icon-btn" data-close>${I("x")}</button></div>
@@ -13960,10 +13977,10 @@
     <div class="v"><b>${esc(e.time)}</b><span>${esc(e.pace || "")}</span></div></button>`;
       }
       function mcrThr(t) {
-        return `<div class="mrk none" style="--c:${t.colour}"><div class="bd">${tierBadge(t, 44)}</div>
+        return `<button class="mrk" data-key="${t.sport}:thr" style="--c:${t.colour}"><div class="bd">${tierBadge(t, 44)}</div>
     <div class="g"><b>${esc(THR_NAME[t.sport] || t.sport)}</b><span>${mcrTier(t)} · ${t.score}${t.coggan ? " · " + esc(t.coggan) : ""}</span>
       <div class="ladder"><i style="--c:${t.colour};width:${Math.max(2, t.pct)}%"></i></div></div>
-    <div class="v"><b>${esc(t.value)}</b></div></div>`;
+    <div class="v"><b>${esc(t.value)}</b></div></button>`;
       }
 
       MPAGES.ranks = async (c) => {

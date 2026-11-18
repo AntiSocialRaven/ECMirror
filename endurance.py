@@ -2421,6 +2421,27 @@ def _steps(ref, p, sport, km):
     return steps
 
 
+def _thr_steps(p, sport):
+    """Like _steps, for an Engine row: the FTP (W/kg and watts), threshold pace or swim speed each division needs."""
+    af = age_factor(p.get("age", 30))
+    table = COGGAN["F" if _female(p) else "M"]
+    inverse = [(score, wkg) for wkg, score in table]
+    steps = []
+    for name, lo, hi, _, colour in reversed(TIERS):
+        if lo <= 0:
+            continue
+        for div, k in ([("", 0)] if hi is None else [("I", 2), ("II", 1), ("III", 0)]):
+            at = lo if hi is None else lo + (hi - lo) * k / 3
+            if sport == "Bike":
+                wkg = interp(inverse, at) * af
+                time, pace = f"{wkg:.2f} W/kg", (f"{wkg * p['weight_kg']:.0f} W" if p.get("weight_kg") else "")
+            else:
+                secs = ref_for(p, (sport, "thr")) / (at / 100) / af
+                time, pace = fd("pace" if sport == "Run" else "swim", secs), ""
+            steps.append(dict(tier=name, div=div, colour=colour, at=round(at, 1), time=time, pace=pace))
+    return steps
+
+
 def _rank_trend(hits, goal_secs):
     """How this event's logged times are moving, in plain words, toward goal_secs - the next rank's time.
 
@@ -2611,7 +2632,14 @@ def records(rows, races, p):
         t = tier_of(grade_wkg(p, val) if sport == "Bike" else grade_time(p, (sport, "thr"), val))
         thr.append(
             dict(
-                sport=sport, value=shown, detail=detail, coggan=coggan_label(t["score"]) if sport == "Bike" else "", **t
+                sport=sport,
+                value=shown,
+                detail=detail,
+                coggan=coggan_label(t["score"]) if sport == "Bike" else "",
+                have=True,
+                key="thr",
+                steps=_thr_steps(p, sport),
+                **t,
             )
         )
     best = {}
