@@ -539,9 +539,10 @@ RECORD_EVENTS = [  # sport, key, label, km - the distances a best effort is hunt
 # s/km; swim = world-record 1500 pace as s/100 m; bike = the top row of the Coggan power profile, W/kg at FTP.
 REF_THRESHOLD = {("Run", "thr"): (168.8, 190.2), ("Swim", "thr"): (58.1, 61.4), ("Bike", "thr"): (6.44, 5.69)}
 
-# Coggan/Allen power profile, FTP column: W/kg -> score, so the chart's own category names line up with the
-# tiers (Cat 5 ~ Iron, Cat 4 ~ Bronze, Cat 3 ~ Silver, Cat 2 ~ Gold, Cat 1 ~ Platinum). The anchor scores below
-# are paired to TIERS' own boundaries one-for-one - see the note above TIERS for why they moved.
+# Coggan/Allen power profile, FTP column: W/kg -> a Coggan score, used ONLY to name the power-profile row (Cat 5 ... Cat 1,
+# Exceptional, World class) shown beside a bike rank. The rank itself is scored like running: your W/kg as a share of the
+# world-best hour (REF_THRESHOLD), age-adjusted. The Coggan table is a lot stricter than that at the low end (it put 2.4 W/kg
+# in Iron while a 4:30/km threshold pace was Platinum), so it no longer decides the tier.
 COGGAN = {
     "M": [(2.21, 25), (2.79, 35), (3.47, 47), (4.20, 58), (4.94, 70), (5.69, 82), (6.44, 100)],
     "F": [(1.80, 25), (2.26, 35), (2.90, 47), (3.60, 58), (4.30, 70), (5.03, 82), (5.69, 100)],
@@ -2022,13 +2023,18 @@ def time_for_score(p, key, score):
 
 
 def grade_wkg(p, wkg):
-    """Score W/kg at FTP on the Coggan ladder, age-adjusted the same way a time is."""
+    """Score W/kg at FTP the way a run or swim threshold is scored: its share of the world-best hour, age-adjusted."""
+    return max(0.0, wkg) / age_factor(p.get("age", 30)) / ref_for(p, ("Bike", "thr")) * 100
+
+
+def coggan_score(p, wkg):
+    """Where W/kg falls on the Coggan power-profile table (age-adjusted); only used to name the row."""
     table = COGGAN["F" if str(p.get("sex", "M")).upper().startswith("F") else "M"]
     return interp(table, max(0.0, wkg) / age_factor(p.get("age", 30)))
 
 
 def coggan_label(score):
-    """The power-profile row this score sits in, floored so the category and the tier band always agree."""
+    """The Coggan power-profile row for a coggan_score (not the rank score: the two scales differ)."""
     return max((x for x in COGGAN_LABEL if x[0] <= score), default=COGGAN_LABEL[0])[1]
 
 
@@ -2424,8 +2430,6 @@ def _steps(ref, p, sport, km):
 def _thr_steps(p, sport):
     """Like _steps, for an Engine row: the FTP (W/kg and watts), threshold pace or swim speed each division needs."""
     af = age_factor(p.get("age", 30))
-    table = COGGAN["F" if _female(p) else "M"]
-    inverse = [(score, wkg) for wkg, score in table]
     steps = []
     for name, lo, hi, _, colour in reversed(TIERS):
         if lo <= 0:
@@ -2433,7 +2437,7 @@ def _thr_steps(p, sport):
         for div, k in ([("", 0)] if hi is None else [("I", 2), ("II", 1), ("III", 0)]):
             at = lo if hi is None else lo + (hi - lo) * k / 3
             if sport == "Bike":
-                wkg = interp(inverse, at) * af
+                wkg = at / 100 * ref_for(p, ("Bike", "thr")) * af
                 time, pace = f"{wkg:.2f} W/kg", (f"{wkg * p['weight_kg']:.0f} W" if p.get("weight_kg") else "")
             else:
                 secs = ref_for(p, (sport, "thr")) / (at / 100) / af
@@ -2635,7 +2639,7 @@ def records(rows, races, p):
                 sport=sport,
                 value=shown,
                 detail=detail,
-                coggan=coggan_label(t["score"]) if sport == "Bike" else "",
+                coggan=coggan_label(coggan_score(p, val)) if sport == "Bike" else "",
                 have=True,
                 key="thr",
                 steps=_thr_steps(p, sport),
