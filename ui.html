@@ -46,6 +46,8 @@
           #dff1ee 76%,
           #dbeaff 100%
         );
+        /* surfaces that float over the page (dialogs, toasts, tooltips) are nearly solid: glass there lets the page show through the text */
+        --float: color-mix(in srgb, #fff 96%, transparent);
         --r: 16px;
         --r-sm: 11px;
         --r-pill: 999px;
@@ -81,6 +83,7 @@
         --shadow-lg: 0 16px 40px -8px rgba(0, 0, 0, 0.7);
         --rim: rgba(255, 255, 255, 0.12);
         --rim-soft: rgba(255, 255, 255, 0.07);
+        --float: color-mix(in srgb, #14161d 97%, transparent);
         --bg-grad: linear-gradient(122deg, #1a1040 0%, #2a1456 20%, #3a1457 38%, #1d2a63 58%, #0e3a4f 78%, #0a0b10 100%);
         color-scheme: dark;
       }
@@ -961,7 +964,7 @@
       .tip {
         position: absolute;
         pointer-events: none;
-        background: var(--panel);
+        background: var(--float);
         border: 1px solid var(--border);
         box-shadow: var(--shadow-lg);
         border-radius: 6px;
@@ -1742,7 +1745,7 @@
         padding: 14px 18px 14px 14px;
         border-radius: var(--r);
         border: 1px solid color-mix(in srgb, var(--c) 45%, var(--border));
-        background: var(--panel);
+        background: var(--float);
         backdrop-filter: var(--glass-blur);
         -webkit-backdrop-filter: var(--glass-blur);
         box-shadow: var(--shadow-lg), 0 0 0 4px color-mix(in srgb, var(--c) 12%, transparent);
@@ -2360,7 +2363,7 @@
         z-index: 50;
       }
       .modal {
-        background: var(--panel);
+        background: var(--float);
         backdrop-filter: var(--glass-blur);
         -webkit-backdrop-filter: var(--glass-blur);
         border-radius: var(--r);
@@ -2436,7 +2439,7 @@
         grid-template-columns: auto 1fr auto;
         gap: 10px;
         align-items: start;
-        background: var(--panel);
+        background: var(--float);
         border: 1px solid var(--border);
         box-shadow: var(--shadow-lg);
         border-radius: 8px;
@@ -3829,18 +3832,56 @@
         white-space: nowrap;
       }
       .ladder {
-        height: 7px;
-        border-radius: 7px;
-        background: var(--grid);
-        overflow: hidden;
+        position: relative;
+        height: 8px;
         margin: 10px 0 5px;
       }
+      .ladder::before,
       .ladder > i {
-        display: block;
-        height: 100%;
-        border-radius: 7px;
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: 8px;
+      }
+      .ladder::before {
+        background: var(--well);
+      }
+      /* the fill is full width and clipped to the score, so it shares its geometry with the track and the same
+         gaps can be cut in both */
+      .ladder > i {
+        background: linear-gradient(90deg, color-mix(in srgb, var(--c) 55%, transparent), var(--c) var(--p));
+        clip-path: inset(0 calc(100% - var(--p)) 0 0 round 8px);
+        animation: rkClip 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+      }
+      /* the glowing marker where you are on the way to the next division */
+      .ladder > .ld {
+        position: absolute;
+        left: var(--p);
+        top: 50%;
+        width: 12px;
+        height: 12px;
+        transform: translate(-50%, -50%);
+        border-radius: 50%;
         background: var(--c);
-        transition: width 0.5s ease;
+        box-shadow:
+          0 0 0 4px color-mix(in srgb, var(--c) 26%, transparent),
+          0 0 14px color-mix(in srgb, var(--c) 70%, transparent);
+        animation: rkDot 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+      }
+      /* with crests on it, the line stops short of each one rather than running behind it: a backing disc can't hide
+         it on a translucent card, and it showed straight through on hover */
+      .ladder-w .ladder::before,
+      .ladder-w .ladder > i {
+        -webkit-mask-image: radial-gradient(circle at calc(var(--pin, 24px) / 2 - 2px) 50%, transparent var(--h0, 16px), #000 calc(var(--h0, 16px) + 0.5px)),
+          radial-gradient(circle at 33.333% 50%, transparent var(--h1, 16px), #000 calc(var(--h1, 16px) + 0.5px)),
+          radial-gradient(circle at 66.667% 50%, transparent var(--h2, 16px), #000 calc(var(--h2, 16px) + 0.5px)),
+          radial-gradient(circle at calc(100% - var(--pin, 24px) / 2) 50%, transparent var(--h3, 16px), #000 calc(var(--h3, 16px) + 0.5px));
+        mask-image: radial-gradient(circle at calc(var(--pin, 24px) / 2 - 2px) 50%, transparent var(--h0, 16px), #000 calc(var(--h0, 16px) + 0.5px)),
+          radial-gradient(circle at 33.333% 50%, transparent var(--h1, 16px), #000 calc(var(--h1, 16px) + 0.5px)),
+          radial-gradient(circle at 66.667% 50%, transparent var(--h2, 16px), #000 calc(var(--h2, 16px) + 0.5px)),
+          radial-gradient(circle at calc(100% - var(--pin, 24px) / 2) 50%, transparent var(--h3, 16px), #000 calc(var(--h3, 16px) + 0.5px));
+        -webkit-mask-composite: source-in;
+        mask-composite: intersect;
       }
       .ladder-w {
         position: relative;
@@ -3859,7 +3900,6 @@
         transform: translate(-50%, -50%);
         line-height: 0;
         border-radius: 50%;
-        background: var(--panel);
       }
       .ladder-b > span:first-child {
         transform: translate(0, -50%);
@@ -3867,14 +3907,14 @@
       .ladder-b > span:last-child {
         transform: translate(-100%, -50%);
       }
-      .pr:hover .ladder-b > span {
-        background: var(--hover);
-      }
       .ladder-b .done svg {
-        opacity: 0.7;
+        filter: drop-shadow(0 0 5px color-mix(in srgb, var(--c) 55%, transparent));
       }
       .ladder-b .todo svg {
-        opacity: 0.35;
+        opacity: 0.38;
+      }
+      .ladder-b svg.tb {
+        animation: rkPin 0.45s 0.3s cubic-bezier(0.2, 1.5, 0.4, 1) both;
       }
       .ladder-b svg.ring {
         position: absolute;
@@ -3883,24 +3923,6 @@
         transform: translate(-50%, -50%);
         pointer-events: none;
         overflow: visible;
-      }
-      .ladder-b .here {
-        isolation: isolate;
-      }
-      .ladder-b .here::before {
-        content: "";
-        position: absolute;
-        left: 50%;
-        top: 50%;
-        width: var(--rd);
-        height: var(--rd);
-        transform: translate(-50%, -50%);
-        border-radius: 50%;
-        background: var(--panel);
-        z-index: -1;
-      }
-      .pr:hover .ladder-b .here::before {
-        background: var(--hover);
       }
       .ladder-b .here svg.tb {
         transform: scale(1.15);
@@ -3912,6 +3934,307 @@
         font-size: 11.5px;
         color: var(--muted);
         font-variant-numeric: tabular-nums;
+      }
+      .ladder-l span:last-child {
+        color: var(--text2);
+        font-weight: 600;
+      }
+      @keyframes rkFill {
+        from {
+          width: 0;
+        }
+      }
+      @keyframes rkClip {
+        from {
+          clip-path: inset(0 100% 0 0 round 8px);
+        }
+      }
+      @keyframes rkDot {
+        from {
+          left: 0;
+          opacity: 0;
+        }
+      }
+      @keyframes rkPin {
+        from {
+          opacity: 0;
+          transform: scale(0.4);
+        }
+      }
+      @keyframes rkCrest {
+        from {
+          opacity: 0;
+          transform: scale(0.7) rotate(-6deg);
+        }
+      }
+      @keyframes rkRise {
+        from {
+          opacity: 0;
+          transform: translateY(8px);
+        }
+      }
+      /* the entrance every page gets when you navigate to it (the Ranks page's rise-and-fill, shared): sections
+         rise in one after another and progress bars fill; re-renders of the same page stay still */
+      .enter .page > *,
+      .enter .msec,
+      .enter .grid > .card {
+        animation: rkRise 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+      }
+      .enter .grid > :nth-child(2) {
+        animation-delay: 0.04s;
+      }
+      .enter .grid > :nth-child(3) {
+        animation-delay: 0.08s;
+      }
+      .enter .grid > :nth-child(4) {
+        animation-delay: 0.12s;
+      }
+      .enter .grid > :nth-child(n + 5) {
+        animation-delay: 0.16s;
+      }
+      .enter .page > :nth-child(2),
+      .enter .msec:nth-child(2) {
+        animation-delay: 0.05s;
+      }
+      .enter .page > :nth-child(3),
+      .enter .msec:nth-child(3) {
+        animation-delay: 0.10s;
+      }
+      .enter .page > :nth-child(4),
+      .enter .msec:nth-child(4) {
+        animation-delay: 0.15s;
+      }
+      .enter .page > :nth-child(5),
+      .enter .msec:nth-child(5) {
+        animation-delay: 0.20s;
+      }
+      .enter .page > :nth-child(6),
+      .enter .msec:nth-child(6) {
+        animation-delay: 0.25s;
+      }
+      .enter .page > :nth-child(7),
+      .enter .msec:nth-child(7) {
+        animation-delay: 0.30s;
+      }
+      .enter .page > :nth-child(8),
+      .enter .msec:nth-child(8) {
+        animation-delay: 0.35s;
+      }
+      .enter .bar > i {
+        animation: rkFill 0.8s 0.2s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .enter .page > *,
+        .enter .msec,
+        .enter .grid > .card,
+        .enter .bar > i {
+          animation: none !important;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .ladder > i,
+        .ladder > .ld,
+        .ladder-b svg.tb,
+        .rk-crest,
+        .rk-mini i,
+        .prlist > .pr {
+          animation: none !important;
+        }
+      }
+      /* the overall-rank hero */
+      .rk-hero {
+        position: relative;
+        overflow: hidden;
+        padding: 24px 26px 18px;
+      }
+      .rk-hero::before {
+        content: "";
+        position: absolute;
+        left: -80px;
+        top: -110px;
+        width: 460px;
+        height: 340px;
+        background: radial-gradient(closest-side, color-mix(in srgb, var(--c) 30%, transparent), transparent);
+        pointer-events: none;
+      }
+      .rk-top {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 26px;
+        flex-wrap: wrap;
+      }
+      .rk-crest {
+        line-height: 0;
+        cursor: pointer;
+        filter: drop-shadow(0 6px 22px color-mix(in srgb, var(--c) 45%, transparent));
+        animation: rkCrest 0.7s cubic-bezier(0.2, 1.3, 0.4, 1) both;
+      }
+      .rk-id {
+        flex: 1 1 240px;
+        min-width: 0;
+        cursor: pointer;
+      }
+      .rk-eyebrow {
+        font-size: 12px;
+        font-weight: 650;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .rk-name {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        margin-top: 4px;
+        font-size: 46px;
+        font-weight: 760;
+        letter-spacing: -0.035em;
+        line-height: 1.02;
+      }
+      .rk-name em {
+        font-style: normal;
+        font-size: 24px;
+        font-weight: 720;
+        letter-spacing: 0;
+        color: var(--c);
+      }
+      .rk-score {
+        display: flex;
+        align-items: baseline;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 8px;
+        font-variant-numeric: tabular-nums;
+      }
+      .rk-score b {
+        font-size: 22px;
+        font-weight: 700;
+      }
+      .rk-score span {
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .rk-score .rk-next {
+        margin-left: 8px;
+        padding: 2px 10px;
+        border-radius: var(--r-pill);
+        background: color-mix(in srgb, var(--c) 14%, transparent);
+        color: var(--text2);
+        font-weight: 600;
+      }
+      .rk-acts {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-self: flex-start;
+      }
+      .rk-hero .ladder-w {
+        margin-top: 26px;
+      }
+      .rk-discs {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 10px;
+        margin-top: 22px;
+      }
+      .rk-d {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 14px;
+        text-align: left;
+        font: inherit;
+        color: inherit;
+        cursor: pointer;
+        border: 1px solid var(--border);
+        border-radius: var(--r);
+        background: var(--panel2);
+      }
+      .rk-d:hover {
+        background: var(--hover);
+        border-color: color-mix(in srgb, var(--c) 45%, var(--border2));
+      }
+      .rk-d .tb {
+        flex: none;
+      }
+      .rk-dt {
+        display: block;
+        flex: 1;
+        min-width: 0;
+      }
+      .rk-dl {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11.5px;
+        font-weight: 650;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .rk-dt b {
+        display: block;
+        margin-top: 1px;
+        font-size: 17px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+      .rk-dm {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 11.5px;
+        color: var(--muted);
+      }
+      .rk-mini {
+        display: block;
+        height: 4px;
+        margin-top: 7px;
+        border-radius: 2px;
+        background: var(--well);
+        overflow: hidden;
+      }
+      .rk-mini i {
+        display: block;
+        height: 100%;
+        border-radius: 2px;
+        background: var(--c);
+        animation: rkFill 0.9s 0.2s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+      }
+      .rk-foot {
+        margin-top: 16px;
+      }
+      .rk-todo {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .rk-todo > span {
+        font-size: 11.5px;
+        font-weight: 650;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-right: 2px;
+      }
+      .rk-chip {
+        padding: 4px 11px;
+        border: 1px dashed var(--border2);
+        border-radius: var(--r-pill);
+        background: transparent;
+        color: var(--muted);
+        font: inherit;
+        font-size: 12.5px;
+        cursor: pointer;
+      }
+      .rk-chip:hover {
+        color: var(--text);
+        border-style: solid;
+        background: var(--hover);
       }
       .tierchip {
         display: inline-flex;
@@ -3977,6 +4300,15 @@
         html:not(.mobile) .prlist {
           grid-template-columns: 1fr 1fr;
         }
+        html:not(.mobile) .prlist.c3 {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+        html:not(.mobile) .prlist.c1 {
+          grid-template-columns: 1fr;
+        }
+      }
+      .prlist > .pr {
+        animation: rkRise 0.4s calc(var(--n, 0) * 45ms) ease-out both;
       }
       .pr {
         display: grid;
@@ -6247,6 +6579,12 @@
           dots = $(".dots", svg);
         const at = (e) => {
           const r = svg.getBoundingClientRect();
+          if (o.xs) {
+            const px = e.clientX - r.left;
+            let best = 0;
+            for (let i = 1; i < n; i++) if (Math.abs(X(i) - px) < Math.abs(X(best) - px)) best = i;
+            return best;
+          }
           return Math.max(0, Math.min(n - 1, Math.round(((e.clientX - r.left - m.l) / pw) * (n - 1))));
         };
         const draw = (i, withTip) => {
@@ -6323,15 +6661,10 @@
           onPick = null,
           group = null,
           onMove = null,
+          xs = null,
         },
       ) {
         series = seriesOn(series);
-        const W = el.clientWidth || 600,
-          H = height,
-          m = { l: 40, r: 12, t: marks.length ? 22 : 10, b: 26 },
-          pw = W - m.l - m.r,
-          ph = H - m.t - m.b,
-          n = labels.length;
         let vals = series.flatMap((s) => s.data.filter((v) => v != null));
         if (!vals.length) vals = [0, 1];
         let lo = Math.min(...vals),
@@ -6342,15 +6675,44 @@
         }
         const pad = (hi - lo) * 0.08 || 1;
         const [a, b, step] = niceScale(zero && lo === 0 ? 0 : lo - pad, hi + pad, 4);
-        const X = (i) => m.l + (n <= 1 ? pw / 2 : (pw * i) / (n - 1)),
+        const ticks = [];
+        for (let v = a; v <= b + step / 2; v += step) ticks.push([v, yfmt(v, step < 1 ? 1 : 0)]);
+        const W = el.clientWidth || 600,
+          H = height,
+          // the left margin grows to fit the widest y label (an h:mm:ss time is wider than a watt figure)
+          m = { l: Math.max(40, Math.ceil(Math.max(...ticks.map((t) => String(t[1]).length)) * 6.6) + 12), r: 12, t: marks.length ? 22 : 10, b: 26 },
+          pw = W - m.l - m.r,
+          ph = H - m.t - m.b,
+          n = labels.length;
+        // xs: a number per point (e.g. days) puts the points where they fall in time instead of evenly spaced
+        const x0 = xs ? Math.min(...xs) : 0,
+          xspan = xs ? Math.max(...xs) - x0 : 0;
+        const X = xs && xspan > 0
+            ? (i) => m.l + (pw * (xs[i] - x0)) / xspan
+            : (i) => m.l + (n <= 1 ? pw / 2 : (pw * i) / (n - 1)),
           Y = (v) => m.t + ph - (ph * (v - a)) / (b - a || 1);
         let s = `<svg class="chart" width="${W}" height="${H}"><defs>${series.map((se, k) => `<linearGradient id="g${k}${el.id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:${se.color};stop-opacity:.22"/><stop offset="1" style="stop-color:${se.color};stop-opacity:0"/></linearGradient>`).join("")}</defs>`;
-        for (let v = a; v <= b + step / 2; v += step)
-          s += `<line class="grid" x1="${m.l}" x2="${W - m.r}" y1="${Y(v)}" y2="${Y(v)}"/><text x="${m.l - 8}" y="${Y(v) + 4}" text-anchor="end">${yfmt(v, step < 1 ? 1 : 0)}</text>`;
+        ticks.forEach(([v, lab]) => {
+          s += `<line class="grid" x1="${m.l}" x2="${W - m.r}" y1="${Y(v)}" y2="${Y(v)}"/><text x="${m.l - 8}" y="${Y(v) + 4}" text-anchor="end">${lab}</text>`;
+        });
         if (zero && a < 0) s += `<line class="zero" x1="${m.l}" x2="${W - m.r}" y1="${Y(0)}" y2="${Y(0)}"/>`;
-        const every = Math.max(1, Math.ceil(n / Math.max(2, Math.floor(pw / 78))));
-        for (let i = 0; i < n; i += every)
-          s += `<text x="${X(i)}" y="${H - 7}" text-anchor="middle">${esc(xfmt(labels[i]))}</text>`;
+        // a label that would run off either edge is anchored to the edge instead of being cut off
+        const xlab = (x, text) => {
+          const half = text.length * 3.4,
+            end = x + half > W - 2,
+            start = x - half < 2;
+          return `<text x="${end ? W - 2 : start ? 2 : x}" y="${H - 7}" text-anchor="${end ? "end" : start ? "start" : "middle"}">${esc(text)}</text>`;
+        };
+        if (xs && xspan > 0) {
+          const k = Math.max(2, Math.min(6, Math.floor(pw / 90)));
+          for (let j = 0; j < k; j++) {
+            const day = x0 + (xspan * j) / (k - 1);
+            s += xlab(m.l + (pw * j) / (k - 1), xfmt(new Date(day * 864e5).toISOString().slice(0, 10)));
+          }
+        } else {
+          const every = Math.max(1, Math.ceil(n / Math.max(2, Math.floor(pw / 78))));
+          for (let i = 0; i < n; i += every) s += xlab(X(i), String(xfmt(labels[i])));
+        }
         if (marker != null && marker < n)
           s += `<line class="today" x1="${X(marker)}" x2="${X(marker)}" y1="${m.t}" y2="${m.t + ph}"/><text x="${X(marker) + 5}" y="${m.t + 11}">Today</text>`;
         bands.forEach((bd) => {
@@ -6415,7 +6777,7 @@
             html: `<b>${esc(xfmt(labels[i]))}${i >= split ? " · plan" : ""}</b>${mk ? `<div style="color:${mk.color};font-weight:600">${esc(mk.name)}</div>` : ""}${rows.join("") || '<span class="muted">No data</span>'}`,
             pts,
           };
-        }, { onPick, group, onMove });
+        }, { onPick, group, onMove, xs });
       }
       function barChart(el, { labels, series, height = 240, yfmt = (v) => v, tipfmt = (v) => v, onPick = null }) {
         series = seriesOn(series);
@@ -6650,7 +7012,8 @@
       }
 
       async function go(page) {
-        if (page !== PAGE) HIDDEN.clear();
+        const changed = page !== PAGE; // only moving to another page plays the entrance, not a re-render of this one
+        if (changed) HIDDEN.clear();
         PAGE = page;
         store.set("page", page);
         if (page !== "races") RACEVIEW = null;
@@ -6661,7 +7024,10 @@
         );
         const meta = NAV.flatMap((x) => x[1]).find((x) => x[0] === page);
         $("#title").textContent = (MOBILE && MTITLE[page]) || meta[1];
+        const c = $("#content");
+        if (changed) c.classList.add("enter");
         await render();
+        if (changed) setTimeout(() => c.classList.remove("enter"), 1300);
       }
       let QUEUE = Promise.resolve();
       // what the body and kit are asking for, as chips in the header of every page: one place, so no page can forget
@@ -7273,9 +7639,10 @@
 
       // ------------------------------------------------------------------ ranks
       // One 0-100 score per best effort (the engine's REF_TIMES / Coggan ladder, age-adjusted) rendered as a tier.
-      // Rank insignia. Seven tiers, so seven silhouettes: the shape alone says which rank you are looking at, which
-      // matters because four of the seven colours are metallic neutrals that read the same to a colour-blind eye and
-      // the same again in a photo. Complexity climbs with the tier - a bare hex, then banded, then a crest, then a
+      // Rank insignia. Nine tiers share seven silhouettes (Bronze and Silver a hex, Diamond and Elite a gem, told
+      // apart by their art and colour): the shape alone says which rank you are looking at, which matters because
+      // several of the colours are metallic neutrals that read the same to a colour-blind eye and the same again in
+      // a photo. Complexity climbs with the tier - a bare hex, then banded, then a crest, then a
       // cut stone - so the progression is legible as a progression, while Iron still looks finished rather than
       // unfinished. All drawn on one 48x48 grid with one stroke weight so a row of them sits level.
       const HEX = "M24 4 41.3 14v20L24 44 6.7 34V14z";
@@ -7383,8 +7750,15 @@
     <circle cx="24" cy="24" r="29.5" fill="none" stroke="${t.colour}" stroke-width="5" mask="url(#${id})"/></svg>`;
       };
       const DIVS = ["III", "II", "I"];
+      // the progress line: one place draws it, so the desktop page, the dialogs and the phone rows cannot drift apart
+      const ladderBar = (t) => {
+        const p = Math.max(2, Math.min(100, t.pct)),
+          within = (p % (100 / 3)) / (100 / 3), // how far through the current division, so the marker keeps clear of the crests
+          dot = p > 4 && p < 94 && within > 0.13 && within < 0.9;
+        return `<div class="ladder" style="--c:${t.colour};--p:${p}%"><i></i>${dot ? '<b class="ld"></b>' : ""}</div>`;
+      };
       const ladder = (t, extra = "", badges = 0) => {
-        const bar = `<div class="ladder"><i style="--c:${t.colour};width:${Math.max(2, t.pct)}%"></i></div>`;
+        const bar = ladderBar(t);
         const pin =
           badges && t.div && t.next
             ? `<div class="ladder-b">${DIVS.map(
@@ -7394,7 +7768,10 @@
                 "",
               )}<span class="todo" style="left:100%" title="${esc(t.next)}">${tierBadge({ tier: t.next, div: "", colour: t.next_colour }, badges + 4)}</span></div>`
             : "";
-        return `${pin ? `<div class="ladder-w" style="--pin:${badges + 4}px">${bar}${pin}</div>` : bar}
+        // each gap in the line is sized to its own crest: the current one carries a ring, the others do not
+        const hole = (i) => (t.div && DIVS[i] === t.div ? badges * 0.62 : badges / 2 + 3);
+        const holes = [0, 1, 2].map((i) => `--h${i}:${hole(i).toFixed(1)}px`).join(";") + `;--h3:${((badges + 4) / 2 + 3).toFixed(1)}px`;
+        return `${pin ? `<div class="ladder-w" style="--pin:${badges + 4}px;${holes}">${bar}${pin}</div>` : bar}
   <div class="ladder-l"><span>${esc(t.tier)}${t.div ? " " + t.div : ""} · ${t.score}</span><span>${t.next ? `${extra || ""}${esc(t.next)} at ${t.next_at}` : "top of the ladder"}</span></div>`;
       };
 
@@ -7412,30 +7789,37 @@
         if (RANK_SPORT !== "All" && !groups.includes(RANK_SPORT)) RANK_SPORT = "All";
         const all = RANK_SPORT === "All";
         const show = (s) => all || RANK_SPORT === s;
+        const gapTo = (t) => (t.next ? `${(t.next_at - t.score).toFixed(1)} to ${t.next}` : "top of the ladder");
+        const disc = (t, label, dot, key, sub) => `<button class="rk-d" data-rk="${esc(key)}" style="--c:${t.colour}">
+      ${tierBadge(t, 48)}
+      <span class="rk-dt"><span class="rk-dl">${dot ? `<i class="dot" style="--c:${dot}"></i>` : ""}${esc(label)}</span>
+        <b>${esc(t.tier)}${t.div ? " " + t.div : ""}</b>
+        <span class="rk-dm">${sub ? esc(sub) : `${t.score} &middot; ${esc(gapTo(t))}`}</span>
+        <i class="rk-mini"><i style="width:${Math.max(3, t.pct || 0)}%"></i></i></span></button>`;
         c.innerHTML = `<div class="page">
-  <div class="card"><div class="card-b">
+  <div class="card rk-hero" style="--c:${o ? o.colour : "var(--muted)"}">
     ${
       o
-        ? `<div class="rank-hero ladder-open" onclick="rankLadder()" title="See the whole ladder">${tierBadge(o, MOBILE ? 58 : 72)}
-      <div class="who"><div class="tier">${esc(o.tier)}${o.div ? `<em>${o.div}</em>` : ""}</div>
-        <div class="cls">${o.cls ? esc(o.cls) + " · " : ""}overall rank across ${d.by_sport.length} discipline${d.by_sport.length === 1 ? "" : "s"}</div></div>
-      ${MOBILE ? "" : `<div class="sportchips">${d.by_sport.map(sportChip).join("")}</div>`}</div>
-      ${ladder(o, "", MOBILE ? 0 : 26)}
-      ${MOBILE && d.by_sport.length ? `<div class="sportchips mt">${d.by_sport.map(sportChip).join("")}</div>` : ""}
-      ${
-        rr
-          ? `<div class="racerank">${tierBadge(rr, 34)}<div><b>${esc(rr.tier)}${rr.div ? " " + rr.div : ""} on race day</b>
-        <span>Your best multisport result &mdash; ${esc(rr.label)}${rr.cls ? " &middot; " + esc(rr.cls) : ""}</span></div></div>`
-          : ""
-      }`
-        : `<div class="empty" style="padding:20px">${I("medal")}<b>No ranks yet</b>Log a workout or a race result and your bests get graded.</div>`
+        ? `<div class="rk-top">
+      <div class="rk-crest" onclick="rankLadder()" title="See the whole ladder">${tierBadge(o, 124)}</div>
+      <div class="rk-id" onclick="rankLadder()" title="See the whole ladder">
+        <div class="rk-eyebrow">Overall rank &middot; ${d.by_sport.length} discipline${d.by_sport.length === 1 ? "" : "s"}</div>
+        <div class="rk-name">${esc(o.tier)}${o.div ? `<em>${o.div}</em>` : ""}</div>
+        <div class="rk-score"><b>${o.score}</b><span>/ 100</span>${o.next ? `<span class="rk-next">${esc(gapTo(o))}</span>` : ""}</div></div>
+      <div class="rk-acts">
+        <button class="btn sm" onclick="rankLadder()">${I("medal")}Rank ladder</button>
+        <button class="btn sm" onclick="openEstimator()">${I("clock")}Estimate a time</button></div></div>
+    ${ladder(o, "", 34)}
+    <div class="rk-discs">${[
+      ...d.by_sport.map((x) => disc(x, x.sport, col(x.sport), x.sport)),
+      ...(rr ? [disc(rr, "Race day", col("Triathlon"), "race", `${rr.label} · ${rr.score}`)] : []),
+    ].join("")}</div>
+    <div class="small muted rk-foot">Graded against fixed world-class standards for a ${d.sex === "F" ? "woman" : "man"} of ${d.age}
+      (age factor ${d.age_factor}) &mdash; never against other people.</div>`
+        : `<div class="empty" style="padding:20px">${I("medal")}<b>No ranks yet</b>Log a workout or a race result and your bests get graded.</div>
+    <div class="row wrap" style="gap:10px;justify-content:center"><button class="btn sm" onclick="openEstimator()">${I("clock")}Estimate a time</button></div>`
     }
-    <div class="row wrap" style="margin-top:14px;gap:10px">
-      <button class="btn sm" onclick="rankLadder()">${I("medal")}See the rank ladder</button>
-      <button class="btn sm" onclick="openEstimator()">${I("clock")}Estimate a time</button></div>
-    <div class="small muted" style="margin-top:10px">Graded against fixed world-class standards for a
-      ${d.sex === "F" ? "woman" : "man"} of ${d.age} (age factor ${d.age_factor}) &mdash; never against other people.</div>
-  </div></div>
+  </div>
 
   ${
     groups.length > 1
@@ -7452,9 +7836,9 @@
     d.thresholds.filter((t) => show(t.sport)).length
       ? `<div class="card mt"><div class="card-h"><div><h3>Engine</h3>
     <div class="sub">What you can hold for an hour &mdash; the number that moves every PR at once</div></div></div>
-    <div class="card-b"><div class="prlist">${d.thresholds
+    <div class="card-b"><div class="prlist c${d.thresholds.filter((t) => show(t.sport)).length}">${d.thresholds
       .filter((t) => show(t.sport))
-      .map(thrRow)
+      .map((t, i) => thrRow(t, i))
       .join("")}</div>
     ${
       d.thresholds.some((t) => t.sport === "Bike" && show(t.sport))
@@ -7469,15 +7853,9 @@
 
   ${
     all && d.multi.length
-      ? `<div class="card mt"><div class="card-h"><div><h3>Race ranks</h3>
+      ? `<div class="card mt" id="rk-race"><div class="card-h"><div><h3>Race ranks</h3>
     <div class="sub">Multisport finishes, graded against world-best times for the distance</div></div></div>
-    <div class="card-b"><div class="prlist">${d.multi.map(prRow).join("")}</div>
-      ${
-        d.multi.some((m) => !m.have)
-          ? `<div class="small muted" style="margin-top:10px">Greyed-out distances are
-        waiting on a finish time &mdash; add one to a race on the Races page, or tap one to see the time for every rank.</div>`
-          : ""
-      }
+    <div class="card-b">${prGrid(d.multi)}
       <div class="small muted" style="margin-top:10px">${I("info")} Courses differ far more than a track does
         &mdash; wetsuits, current, elevation, draft-legal racing &mdash; so read these as a guide, not a stopwatch.</div>
     </div></div>`
@@ -7488,10 +7866,7 @@
     d.off_bike.filter((e) => show(e.sport)).length
       ? `<div class="card mt"><div class="card-h"><div><h3>Off the bike</h3>
     <div class="sub">Run splits from your multisport races &mdash; the part bricks are training for</div></div></div>
-    <div class="card-b"><div class="prlist">${d.off_bike
-      .filter((e) => show(e.sport))
-      .map(prRow)
-      .join("")}</div>
+    <div class="card-b">${prGrid(d.off_bike.filter((e) => show(e.sport)))}
       <div class="small muted" style="margin-top:10px">${I("info")} Graded against world-class triathlon run
         splits, not track records: a run off the bike isn't a standalone run and shouldn't be scored like one.</div>
     </div></div>`
@@ -7504,22 +7879,15 @@
       (s) => `<div class="card mt"><div class="card-h"><div><h3>${s} bests</h3>
     <div class="sub">From logged sessions, race results and the fastest block inside a longer session</div></div>
     </div>
-    <div class="card-b"><div class="prlist">${ev(s).map(prRow).join("")}</div>
-      ${
-        ev(s).some((e) => !e.have)
-          ? `<div class="small muted" style="margin-top:10px">Greyed-out distances need a
-        session or a race at that distance &mdash; a fast block inside a longer one counts too. Tap one to see the time for every rank.</div>`
-          : ""
-      }
-    </div></div>`,
+    <div class="card-b">${prGrid(ev(s))}</div></div>`,
     )
     .join("")}
 
   ${["Run", "Bike"]
     .filter((s) => groups.includes(s) && show(s))
     .map(
-      (s) => `<div class="card mt"><div class="card-h"><div><h3>Best efforts</h3>
-    <div class="sub">${s === "Bike" ? "Your strongest power for each duration you've ever held it" : "Your fastest pace for each distance you've ever held it"}</div></div></div>
+      (s) => `<div class="card mt"><div class="card-h"><div><h3>${s === "Bike" ? "Best power by ride length" : "Best paces"}</h3>
+    <div class="sub">${s === "Bike" ? "Your highest average power over a single ride at least this long" : "Your fastest pace for each distance you've ever held it"}</div></div></div>
     <div class="card-b"><div id="beCurve-${s}" class="small muted">Loading&hellip;</div></div></div>`,
     )
     .join("")}
@@ -7552,7 +7920,16 @@
       : ""
   }
   </div>`;
-        $$("#content .pr[data-key]").forEach((b) => (b.onclick = () => prDetail(b.dataset.key)));
+        $$("#content [data-key]").forEach((b) => (b.onclick = () => prDetail(b.dataset.key)));
+        $$("#content .rk-d").forEach(
+          (b) =>
+            (b.onclick = () => {
+              const k = b.dataset.rk;
+              if (k === "race") return void $("#rk-race")?.scrollIntoView({ behavior: "smooth", block: "start" });
+              RANK_SPORT = RANK_SPORT === k ? "All" : k;
+              render();
+            }),
+        );
         $$("#rankFilter [data-chip]").forEach(
           (b) =>
             (b.onclick = () => {
@@ -7581,6 +7958,12 @@
           return;
         }
         const isPower = be.metric === "power";
+        // every duration comes from a whole-ride average, so one ride (or several equal ones) draws a flat line
+        // that says nothing; wait for rides that differ before drawing a curve
+        if (isPower && new Set(be.points.filter((p) => p.value != null).map((p) => p.value)).size < 2) {
+          el.innerHTML = `<div class="small muted">One power ride so far, so there is no curve to draw. Log rides of different lengths with power and this fills in.</div>`;
+          return;
+        }
         lineChart(el, {
           labels: be.points.map((p) => p.label),
           series: [
@@ -7589,7 +7972,7 @@
           ],
           height: 180,
           xfmt: (v) => v,
-          yfmt: (v) => (isPower ? v.toFixed(0) : fmtPace(v)),
+          yfmt: (v, dec) => (isPower ? v.toFixed(dec) : fmtPace(v)),
           tipfmt: (v) => (isPower ? `${v.toFixed(0)} W` : `${fmtPace(v)}${be.pace_unit}`),
         });
       }
@@ -7597,14 +7980,25 @@
       const sportChip = (s) =>
         `<div class="sportchip">${tierBadge(s, 30)}<div><b>${esc(s.sport)}</b><span>${esc(s.tier)}${s.div ? " " + s.div : ""} · ${s.score}</span></div></div>`;
 
-      function prRow(e) {
-        if (!e.have)
-          return `<button class="pr none unclaimed" data-key="${e.sport}:${e.key}" title="${esc(e.hint)}">
-    <div class="hd">${sportIcon(e.sport)}<b>${esc(e.label)}</b></div><div class="rt faint">see the times &rsaquo;</div></button>`;
-        return `<button class="pr" data-key="${e.sport}:${e.key}">
+      // distances with a result are cards; the ones still waiting for a first result sit in one quiet row below them
+      // instead of as greyed-out cards that leave holes in the grid
+      function prGrid(items, cls = "") {
+        const have = items.filter((e) => e.have),
+          none = items.filter((e) => !e.have);
+        return `${have.length ? `<div class="prlist ${cls}">${have.map(prRow).join("")}</div>` : ""}
+    ${
+      none.length
+        ? `<div class="rk-todo"><span>Not logged yet</span>${none
+            .map((e) => `<button class="rk-chip" data-key="${e.sport}:${e.key}" title="${esc(e.hint || "")}">${esc(e.label)}</button>`)
+            .join("")}</div>`
+        : ""
+    }`;
+      }
+      function prRow(e, i = 0) {
+        return `<button class="pr" style="--n:${i}" data-key="${e.sport}:${e.key}">
     <div class="hd">${sportIcon(e.sport)}<b>${esc(e.label)}</b></div><div class="chip-go">${tierChip(e)}${I("right", "i chev")}</div>
     <div class="t">${esc(e.time)}</div><div class="rt">${esc(e.pace || "")}</div>
-    ${ladder(e, e.to_next ? `${e.to_next} to ` : "", 20)}
+    ${ladder(e, e.to_next ? (/^0:0?0$/.test(e.to_next) ? "under a second to " : `${e.to_next} to `) : "", 24)}
     <div class="sub">${[
       e.gain ? `<span class="pr-gain">${esc(e.gain)} faster than before</span>` : "",
       e.date ? esc(shortDate(e.date)) : "",
@@ -7614,10 +8008,10 @@
       .join(" &middot; ")}</div></button>`;
       }
       const THR_NAME = { Bike: "FTP", Run: "Threshold pace", Swim: "Critical swim speed" };
-      function thrRow(t) {
+      function thrRow(t, i = 0) {
         // a score over 100 means "faster than the world record", which a measured race never is but a mistyped FTP or
         // a botched CSS test easily can be - so say so instead of handing out an Elite badge
-        return `<button class="pr" data-key="${t.sport}:thr" title="See the value each rank needs"><div class="hd">${sportIcon(t.sport)}<b>${esc(THR_NAME[t.sport] || t.sport)}</b></div>
+        return `<button class="pr" style="--n:${i}" data-key="${t.sport}:thr" title="See the value each rank needs"><div class="hd">${sportIcon(t.sport)}<b>${esc(THR_NAME[t.sport] || t.sport)}</b></div>
     <div>${tierChip(t)}</div><div class="t">${esc(t.value)}</div>
     <div class="rt">${t.coggan ? esc(t.coggan) : ""}</div>${ladder(t)}
     <div class="sub">${esc(t.detail)}${
@@ -7729,8 +8123,11 @@
           .map(([k, v]) => `<div><span>${esc(k)}</span><b>${esc(v)}</b></div>`)
           .join("")}
         </div>
-        <div class="small muted mt">Beating this means a faster logged session, a race result, or a faster block
-          inside a longer run &mdash; all three count.</div>
+        <div class="small muted mt">${
+          { Run: "run", Swim: "swim", Bike: "ride" }[e.sport]
+            ? `Beating this means a faster logged session, a race result, or a faster block inside a longer ${{ Run: "run", Swim: "swim", Bike: "ride" }[e.sport]} &mdash; all three count.`
+            : "Beating this means a faster finish in a logged race of this distance."
+        }</div>
       </div>
       <div id="prSteps" hidden>${stepsTable(e)}</div>
       <div id="prHist" class="mt"></div>
@@ -7743,13 +8140,14 @@
         call("pr_history", e.sport, e.key).then((hd) => {
           const pts = hd.points;
           if (!pts || pts.length < 2 || !$("#prHist")) return;
-          const t = (s) => (s >= 3600 ? `${Math.floor(s / 3600)}:${mmss(s % 3600)}` : mmss(s));
-          $("#prHist").innerHTML = `<div class="small muted" style="margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.06em">Your best over time</div><div id="prHistC"></div>`;
+          const t = (s) => fmtClock(Math.round(s));
+          $("#prHist").innerHTML = `<div class="small muted" style="margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.06em">Your best over time</div><div class="small muted" style="margin-bottom:6px">The faint line is each effort; the solid line is your best so far.</div><div id="prHistC"></div>`;
           lineChart($("#prHistC"), {
             labels: pts.map((p) => p.date),
+            xs: pts.map((p) => Date.parse(p.date + "T00:00Z") / 864e5),
             series: [
-              { name: "Effort", color: "var(--muted)", data: pts.map((p) => p.secs), thin: true },
-              { name: "Best", color: col(e.sport), data: pts.map((p) => p.best), area: true },
+              { name: "Each effort", color: "var(--muted)", data: pts.map((p) => p.secs), thin: true },
+              { name: "Best so far", color: col(e.sport), data: pts.map((p) => p.best), area: true },
             ],
             height: 150,
             yfmt: (v) => t(v),
@@ -7895,7 +8293,7 @@
         const rungs = [...(d ? d.tiers : [])].reverse();
         modal(
           `<div class="modal-h"><div><h3>The rank ladder</h3>
-      <div class="small muted">Seven tiers, three divisions in each. Every discipline and distance is scored on the same scale.</div></div>
+      <div class="small muted">Nine tiers, Iron to Elite, with three divisions in each below Elite. Every discipline and distance is scored on the same scale.</div></div>
       <button class="icon-btn" data-close>${I("x")}</button></div>
     <div class="modal-b">
       ${
@@ -13973,13 +14371,13 @@
     <div class="g"><b>${esc(e.label)}</b><span>Not done yet &middot; tap for the times</span></div><span class="faint">&rsaquo;</span></button>`;
         return `<button class="mrk" data-key="${e.sport}:${e.key}" style="--c:${e.colour}"><div class="bd">${tierBadge(e, 44)}</div>
     <div class="g"><b>${esc(e.label)}</b><span>${mcrTier(e)} · ${e.score}${e.gain ? ` · <i class="pr-gain">${esc(e.gain)} faster</i>` : ""}</span>
-      <div class="ladder"><i style="--c:${e.colour};width:${Math.max(2, e.pct)}%"></i></div></div>
+      ${ladderBar(e)}</div>
     <div class="v"><b>${esc(e.time)}</b><span>${esc(e.pace || "")}</span></div></button>`;
       }
       function mcrThr(t) {
         return `<button class="mrk" data-key="${t.sport}:thr" style="--c:${t.colour}"><div class="bd">${tierBadge(t, 44)}</div>
     <div class="g"><b>${esc(THR_NAME[t.sport] || t.sport)}</b><span>${mcrTier(t)} · ${t.score}${t.coggan ? " · " + esc(t.coggan) : ""}</span>
-      <div class="ladder"><i style="--c:${t.colour};width:${Math.max(2, t.pct)}%"></i></div></div>
+      ${ladderBar(t)}</div>
     <div class="v"><b>${esc(t.value)}</b></div></button>`;
       }
 
@@ -14058,8 +14456,8 @@
   ${["Run", "Bike"]
     .filter((s) => groups.includes(s) && show(s))
     .map(
-      (s) => `<div class="msec"><h3>Best efforts</h3><div class="mcard"><div class="p">
-    <p class="small muted" style="margin:0 0 8px">${s === "Bike" ? "Your strongest power for each duration you've ever held it" : "Your fastest pace for each distance you've ever held it"}</p>
+      (s) => `<div class="msec"><h3>${s === "Bike" ? "Best power by ride length" : "Best paces"}</h3><div class="mcard"><div class="p">
+    <p class="small muted" style="margin:0 0 8px">${s === "Bike" ? "Your highest average power over a single ride at least this long" : "Your fastest pace for each distance you've ever held it"}</p>
     <div id="beCurve-${s}" class="small muted">Loading&hellip;</div></div></div></div>`,
     )
     .join("")}
